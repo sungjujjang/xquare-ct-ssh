@@ -39,8 +39,10 @@ Internal Agent  ── PTY (pty.fork / ConPTY) ──► 실제 Shell
 | 긴 출력 실시간 스트리밍 | 비동기 큐 + `pause_writing`/`resume_writing` 기반 역압(backpressure) |
 | interactive shell | `pty.fork()` (POSIX) / ConPTY (Windows) |
 | Windows (`cls`, `powershell`, `cmd`) | `agent/pty_backend.py` `WindowsPty` (pywinpty/ConPTY) |
-| 운영자 C2 관리 UI (목록/생성/활성화/삭제/kick/토큰재발급/계정/로그) | `relay/ssh_server.py` (C2 명령) + `relay/registry.py` `disconnect` + `relay/logs.py` |
+| 운영자 C2 관리 UI (목록/생성/활성화/삭제/kick/토큰재발급/계정/비밀번호/로그) | `relay/ssh_server.py` (C2 명령) + `relay/registry.py` `disconnect` + `relay/logs.py` |
+| 관리자: 비밀번호 없이 서버 직행 (`login`, exec `attach`) | `relay/ssh_server.py` `_cmd_login` / `_attach_admin` / `_parse_exec` |
 | 비관리자: 서버 id+비밀번호로 해당 셸 직행 | `relay/ssh_server.py` `validate_password` → `RelaySession._attach_direct` |
+| DevOps 조회 툴 (호스트/네트워크/프로세스/전체 overview) | `relay/ssh_server.py` `info`/`net`/`procs`/`overview` → `SYSINFO` 제어 프레임 → `agent/sysinfo.py` |
 
 ---
 
@@ -70,6 +72,7 @@ relay/                      # 중계(릴레이) 서버 - 독립 배포 가능
 agent/                      # 내부 에이전트 - 독립 배포 가능
   __main__.py               엔트리포인트
   agent.py                  WebSocket 클라이언트, 세션 멀티플렉싱, 재접속
+  sysinfo.py                호스트/네트워크/프로세스 수집 (info/net/procs)
   pty_backend.py            Unix PTY / Windows ConPTY 백엔드
   protocol.py               공통 프레이밍 (vendored 복사본)
   requirements.txt          에이전트 의존성
@@ -103,6 +106,8 @@ tests/                      프로토콜/보안/에디터/DB/로그/웹 단위 �
 | `CLOSE` | 0x22 | 양방향 | 세션 종료 (payload = 마지막 바이트) |
 | `PING` / `PONG` | 0x30/0x31 | 양방향 | keepalive |
 | `EXIT` | 0x40 | 양방향 | 연결 종료 |
+| `SYSINFO` | 0x50 | relay→agent | `{cmd:"info"\|"net"\|"procs", args}` 제어 조회 |
+| `SYSINFO_RES` | 0x51 | agent→relay | `{cmd, ok, error, data}` |
 
 `DATA`는 절대 문자열 명령어로 해석되지 않습니다. 즉 `vim`이 보내는 제어 시퀀스,
 `top`이 그리는 화면, UTF-8 부분 바이트까지 그대로 전달됩니다.
@@ -286,9 +291,10 @@ python -m agent --relay ws://relay-host:8765/agent --id win-001 --token xq_... -
 
 ### 4) 접속
 
-접속 방식은 두 가지입니다.
+접속 방식은 세 가지입니다.
 
-**(a) 운영자(관리자)** — `relay_users` 계정으로 로그인 → C2 CLI:
+**(a) 운영자(관리자)** — `relay_users` 계정으로 로그인 → C2 CLI.
+관리자는 **서버 로그인 비밀번호 없이** 원하는 서버에 바로 붙을 수 있습니다:
 
 ```bash
 ssh alice@relay-host -p 2222
@@ -299,8 +305,7 @@ C2> list
   SERVER           STATUS     SESS  DESCRIPTION
   server-001       online        0
 
-C2> login server-001
-Password for server-001: ********
+C2> login server-001        # 비밀번호 불필요 (관리자)
 
 Connected to server-001
 
@@ -313,6 +318,12 @@ alice@server-001:~$ exit
 C2> exit
 ```
 
+**exec 원샷 접속** — 메뉴를 거치지 않고 바로 서버 셸로 진입:
+
+```bash
+ssh -t alice@relay-host -p 2222 attach server-001
+# 또는
+ssh -t alice@relay-host -p 2222 server-001
 **(b) 일반 사용자(비관리자)** — **서버 id 를 SSH 사용자명으로, 서버 로그인
 비밀번호를 SSH 비밀번호로** 입력하면 메뉴 없이 그 서버 셸로 바로 들어갑니다:
 

@@ -324,6 +324,8 @@ C2> exit
 ssh -t alice@relay-host -p 2222 attach server-001
 # 또는
 ssh -t alice@relay-host -p 2222 server-001
+```
+
 **(b) 일반 사용자(비관리자)** — **서버 id 를 SSH 사용자명으로, 서버 로그인
 비밀번호를 SSH 비밀번호로** 입력하면 메뉴 없이 그 서버 셸로 바로 들어갑니다:
 
@@ -336,6 +338,10 @@ ssh server-001@relay-host -p 2222
 로그아웃(`exit`)하면 연결이 종료됩니다. 해당 서버만 접근할 수 있고 C2 명령은
 사용할 수 없습니다.
 
+> 관리자 경로((a))는 릴레이 계정으로 이미 인증된 상태이므로 서버별 로그인
+> 비밀번호를 묻지 않습니다. `login <server> <pw>`처럼 비밀번호를 함께 주면 그
+> 값도 검증합니다(스크립트 호환용).
+
 ---
 
 ## C2 CLI 명령 (운영자)
@@ -345,19 +351,30 @@ ssh server-001@relay-host -p 2222
 | `list` (`servers`, `ls`) | 서버 목록 + online/offline, 활성 세션 수 |
 | `sessions` (`who`) | 서버별 활성 세션 수 |
 | `add-server <id> [password]` | 서버 생성 + **원라이너 설치 링크** 출력 |
-| `login <server> [password]` (`connect`, `attach`) | 인증 후 셸에 attach |
+| `login <server> [password]` (`connect`, `attach`) | 셸에 attach (관리자는 비밀번호 불필요) |
 | `enable <server>` / `disable <server>` | 에이전트 접속 허용/차단(+연결 해제) |
 | `remove-server <server>` (`delete`) | 서버와 자격증명 삭제 |
 | `kick <server>` | 살아있는 에이전트 연결 강제 해제 |
 | `reset-token <server>` | 에이전트 토큰 재발급 + 설치 링크 재출력 |
+| `overview` (`fleet`, `all`) | **모든 서버 리소스를 한 표로** (host/IP/uptime/load/CPU/mem/disk) |
 | `users` (`admins`) | 운영자 계정 목록 |
 | `add-user <name> [password]` | 운영자 계정 생성/비밀번호 변경 |
 | `remove-user <name>` | 운영자 계정 삭제 (마지막/본인 계정은 보호) |
+| `passwd [password]` | **내 운영자 비밀번호 변경** (생략 시 echo 없이 2회 확인 입력) |
+| `reset-password <name> [password]` | 다른 운영자 비밀번호 재설정 |
+| `set-password <server> [password]` | **서버 로그인 비밀번호 변경** (직접 SSH 로그인/`login`에 사용) |
+| `info <server>` | 호스트/CPU/메모리/스왑/디스크 요약 (에이전트에서 실시간 조회) |
+| `net <server>` | 네트워크 인터페이스, 리스닝 포트, 연결 수 |
+| `procs <server> [n]` | CPU 사용률 상위 n개 프로세스 (기본 15) |
 | `logs [n]` | 최근 릴레이 로그 n줄 |
 | `whoami` | 현재 계정 표시 |
 | `ping` | CLI 응답 확인 |
 | `help` (`?`) | 도움말 |
 | `exit` (`quit`, `logout`) | 접속 종료 |
+
+> `info`/`net`/`procs`는 제어 채널(`SYSINFO`/`SYSINFO_RES`)로 에이전트에 요청하며,
+> 에이전트에 `psutil`이 있으면 크로스플랫폼 데이터를, 없으면 `/proc`·표준 라이브러리
+> 폴백을 사용합니다. 에이전트가 offline이면 조회할 수 없습니다.
 
 CLI는 방향키(히스토리/커서), Home/End, Delete, Tab 완성, Ctrl+A/E/U/K/W/C/L,
 Backspace를 지원합니다. `login`/`add-server`/`add-user`에서 비밀번호를 생략하면
@@ -400,7 +417,7 @@ python -m pytest -q
 - `tests/test_protocol.py` — 프레이밍/바이너리 무손실/리사이즈 (+ vendored 복사본 동일성)
 - `tests/test_security.py` — 해시/토큰
 - `tests/test_lineeditor.py` — 편집·히스토리·제어문자·UTF-8
-- `tests/test_db.py` — 운영자 계정, 서버 enable/disable/remove, 토큰 재발급
+- `tests/test_db.py` — 운영자 계정, 서버 enable/disable/remove, 토큰 재발급, 비밀번호 변경
 - `tests/test_logs.py` — 로그 링버퍼 캡처/테일
 - `tests/test_web.py` — 설치 웹 서버(토큰 검증, 원라이너 생성, 패키지 배포)
 - `tests/test_e2e.py` — **SSH 클라이언트 → 릴레이 → WebSocket → 에이전트 PTY → bash**

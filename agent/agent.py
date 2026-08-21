@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 import websockets
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidStatus
 
-from agent import protocol
+from agent import protocol, sysinfo
 from agent.pty_backend import create_pty, default_shell
 
 log = logging.getLogger("agent")
@@ -169,6 +169,7 @@ class Agent:
             "hostname": socket.gethostname(),
             "os": platform.platform(),
             "python": platform.python_version(),
+            "ips": sysinfo.local_ips(),
         }
         await ws.send(protocol.encode(protocol.AUTH, 0, json.dumps(info)))
         raw = await asyncio.wait_for(ws.recv(), timeout=15)
@@ -211,8 +212,22 @@ class Agent:
                     await session.close()
             elif msg_type == protocol.PING:
                 await self.send(protocol.PONG, session_id, b"")
+            elif msg_type == protocol.SYSINFO:
+                await self._handle_sysinfo(session_id, payload)
             # AUTH_OK/PONG/unknown are ignored.
 
+    async def _handle_sysinfo(self, session_id: int, payload: bytes) -> None:
+        request: dict = {}
+        try:
+            request = protocol.decode_json(payload) if payload else {}
+        except protocol.ProtocolError:
+            pass
+        cmd = request.get("cmd") or ""
+        args = request.get("args") or {}
+        try:
+            data = sysinfo.collect(cmd, args)
+            reply = {"cmd": cmd, "ok": True, "error": None, "data": data}
+        except Exception as exc:
     async def _open_session(self, session_id: int, payload: bytes) -> None:
         try:
             options = protocol.decode_json(payload) if payload else {}

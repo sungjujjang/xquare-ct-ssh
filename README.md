@@ -418,12 +418,16 @@ python -m pytest -q
 - `tests/test_security.py` — 해시/토큰
 - `tests/test_lineeditor.py` — 편집·히스토리·제어문자·UTF-8
 - `tests/test_db.py` — 운영자 계정, 서버 enable/disable/remove, 토큰 재발급, 비밀번호 변경
+- `tests/test_sysinfo.py` — 에이전트 `info`/`net`/`procs` 수집기 + 포맷 헬퍼
 - `tests/test_logs.py` — 로그 링버퍼 캡처/테일
 - `tests/test_web.py` — 설치 웹 서버(토큰 검증, 원라이너 생성, 패키지 배포)
 - `tests/test_e2e.py` — **SSH 클라이언트 → 릴레이 → WebSocket → 에이전트 PTY → bash**
   전체 경로를 실제로 연결하여 확인:
   - 로그인 후 실제 셸 프롬프트
   - C2 관리 명령(`users`/`disable`/`enable`/`remove-server`/`logs`) 및 `add-server`
+  - 비밀번호 관리(`passwd`/`reset-password`/`set-password`)
+  - DevOps 조회(`info`/`net`/`procs`/`overview`)
+  - 관리자 비밀번호 없는 `login` + exec `attach` 직행
   - 비관리자 **서버 id + 비밀번호 직행 접속**
   - ANSI 컬러 이스케이프 통과
   - `stty size` 로 resize 전파 검증

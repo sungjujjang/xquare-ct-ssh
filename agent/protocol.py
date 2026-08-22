@@ -41,6 +41,10 @@ PING = 0x30
 PONG = 0x31
 EXIT = 0x40          # either side : agent shutting the connection down
 
+# system / network introspection (control channel, no PTY session allocated)
+SYSINFO = 0x50       # relay -> agent : {"cmd":"info"|"net"|"procs","args":{...}}
+SYSINFO_RES = 0x51   # agent -> relay : {"cmd":str,"ok":bool,"error":str|None,"data":any}
+
 # session lifecycle
 OPEN = 0x10          # relay -> agent : {"shell","cols","rows","env"}
 OPENED = 0x11        # agent -> relay : {"ok":bool,"error":str|None}
@@ -111,6 +115,8 @@ _TYPE_NAMES = {
     PING: "PING",
     PONG: "PONG",
     EXIT: "EXIT",
+    SYSINFO: "SYSINFO",
+    SYSINFO_RES: "SYSINFO_RES",
     OPEN: "OPEN",
     OPENED: "OPENED",
     CLOSE: "CLOSE",

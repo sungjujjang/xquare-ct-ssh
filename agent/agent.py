@@ -228,6 +228,10 @@ class Agent:
             data = sysinfo.collect(cmd, args)
             reply = {"cmd": cmd, "ok": True, "error": None, "data": data}
         except Exception as exc:
+            log.warning("sysinfo %s failed: %s", cmd, exc)
+            reply = {"cmd": cmd, "ok": False, "error": str(exc), "data": None}
+        await self.send(protocol.SYSINFO_RES, session_id, json.dumps(reply))
+
     async def _open_session(self, session_id: int, payload: bytes) -> None:
         try:
             options = protocol.decode_json(payload) if payload else {}

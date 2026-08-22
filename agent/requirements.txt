@@ -2,3 +2,5 @@
 # On Windows add: pywinpty
 websockets>=13
 PyYAML>=6.0
+# Optional: enables richer C2 'info'/'net'/'procs' data. stdlib fallback exists.
+psutil>=5.9

@@ -28,3 +28,24 @@ except Exception:  # pragma: no cover - optional dependency
 def _safe(fn: Callable[[], Any], default: Any = None) -> Any:
     try:
         return fn()
+    except Exception:
+        return default
+
+
+def _read(path: str) -> str:
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        return handle.read()
+
+
+def local_ips() -> list[str]:
+    """Non-loopback IPv4 addresses of this host (best effort)."""
+    ips: set[str] = set()
+    if psutil is not None:
+        try:
+            for addrs in psutil.net_if_addrs().values():
+                for addr in addrs:
+                    if addr.family == socket.AF_INET and not addr.address.startswith("127."):
+                        ips.add(addr.address)
+            if ips:
+                return sorted(ips)
+        except Exception:

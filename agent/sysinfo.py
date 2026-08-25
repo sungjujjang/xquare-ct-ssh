@@ -49,3 +49,24 @@ def local_ips() -> list[str]:
             if ips:
                 return sorted(ips)
         except Exception:
+            pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if not ip.startswith("127."):
+                ips.add(ip)
+    except Exception:
+        pass
+    return sorted(ips)
+
+
+# --- /proc helpers ---------------------------------------------------------
+
+
+def _proc_uptime() -> float | None:
+    try:
+        return float(_read("/proc/uptime").split()[0])
+    except Exception:
+        return None
+
+

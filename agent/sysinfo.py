@@ -70,3 +70,24 @@ def _proc_uptime() -> float | None:
         return None
 
 
+def _proc_meminfo() -> dict[str, int]:
+    out: dict[str, int] = {}
+    try:
+        for line in _read("/proc/meminfo").splitlines():
+            key, _, rest = line.partition(":")
+            value = rest.strip().split()
+            if value and value[0].isdigit():
+                out[key.strip()] = int(value[0]) * 1024
+    except Exception:
+        return {}
+    return out
+
+
+def _hex_ipv4(raw: str) -> str:
+    return socket.inet_ntoa(struct.pack("<I", int(raw, 16)))
+
+
+def _hex_ipv6(raw: str) -> str:
+    packed = b"".join(struct.pack("<I", int(raw[i : i + 8], 16)) for i in range(0, 32, 8))
+    return socket.inet_ntop(socket.AF_INET6, packed)
+

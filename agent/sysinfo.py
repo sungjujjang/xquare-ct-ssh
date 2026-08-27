@@ -91,3 +91,24 @@ def _hex_ipv6(raw: str) -> str:
     packed = b"".join(struct.pack("<I", int(raw[i : i + 8], 16)) for i in range(0, 32, 8))
     return socket.inet_ntop(socket.AF_INET6, packed)
 
+
+def _proc_listen_ports() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for path, decode in (("/proc/net/tcp", _hex_ipv4), ("/proc/net/tcp6", _hex_ipv6)):
+        try:
+            lines = _read(path).splitlines()[1:]
+        except Exception:
+            continue
+        for line in lines:
+            fields = line.split()
+            if len(fields) < 4 or fields[3] != "0A":  # 0A == TCP_LISTEN
+                continue
+            address, port_hex = fields[1].split(":")
+            try:
+                ip = decode(address)
+                port = int(port_hex, 16)
+            except Exception:
+                continue
+            rows.append({"proto": "tcp", "laddr": f"{ip}:{port}", "state": "LISTEN", "pid": None, "process": None})
+    return rows
+

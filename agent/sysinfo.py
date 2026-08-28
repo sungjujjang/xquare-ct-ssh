@@ -112,3 +112,24 @@ def _proc_listen_ports() -> list[dict[str, Any]]:
             rows.append({"proto": "tcp", "laddr": f"{ip}:{port}", "state": "LISTEN", "pid": None, "process": None})
     return rows
 
+
+# --- collectors ------------------------------------------------------------
+
+
+def _uptime_seconds() -> float | None:
+    if psutil is not None:
+        boot = _safe(psutil.boot_time)
+        if boot:
+            return max(0.0, time.time() - boot)
+    return _proc_uptime()
+
+
+def _memory() -> dict[str, Any] | None:
+    if psutil is not None:
+        vm = _safe(psutil.virtual_memory)
+        if vm is not None:
+            return {"total": vm.total, "used": vm.used, "available": vm.available, "percent": vm.percent}
+    mem = _proc_meminfo()
+    if not mem:
+        return None
+    total = mem.get("MemTotal", 0)

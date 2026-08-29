@@ -133,3 +133,24 @@ def _memory() -> dict[str, Any] | None:
     if not mem:
         return None
     total = mem.get("MemTotal", 0)
+    available = mem.get("MemAvailable", mem.get("MemFree", 0))
+    used = max(0, total - available)
+    percent = round(used / total * 100, 1) if total else 0.0
+    return {"total": total, "used": used, "available": available, "percent": percent}
+
+
+def _swap() -> dict[str, Any] | None:
+    if psutil is not None:
+        sw = _safe(psutil.swap_memory)
+        if sw is not None:
+            return {"total": sw.total, "used": sw.used, "percent": sw.percent}
+    mem = _proc_meminfo()
+    total = mem.get("SwapTotal", 0)
+    free = mem.get("SwapFree", 0)
+    used = max(0, total - free)
+    return {"total": total, "used": used, "percent": round(used / total * 100, 1) if total else 0.0}
+
+
+def _disk(path: str | None = None) -> list[dict[str, Any]]:
+    target = path or os.path.expanduser("~") or "/"
+    try:

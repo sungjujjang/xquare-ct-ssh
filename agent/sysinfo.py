@@ -154,3 +154,24 @@ def _swap() -> dict[str, Any] | None:
 def _disk(path: str | None = None) -> list[dict[str, Any]]:
     target = path or os.path.expanduser("~") or "/"
     try:
+        import shutil
+
+        usage = shutil.disk_usage(target)
+    except Exception:
+        return []
+    percent = round(usage.used / usage.total * 100, 1) if usage.total else 0.0
+    return [{"path": target, "total": usage.total, "used": usage.used, "free": usage.free, "percent": percent}]
+
+
+def _loadavg() -> list[float] | None:
+    try:
+        return [round(x, 2) for x in os.getloadavg()]
+    except (OSError, AttributeError):
+        return None
+
+
+def collect_info() -> dict[str, Any]:
+    cpu_percent = None
+    if psutil is not None:
+        cpu_percent = _safe(lambda: psutil.cpu_percent(interval=0.15))
+    return {

@@ -175,3 +175,24 @@ def collect_info() -> dict[str, Any]:
     if psutil is not None:
         cpu_percent = _safe(lambda: psutil.cpu_percent(interval=0.15))
     return {
+        "hostname": _safe(socket.gethostname, ""),
+        "os": _safe(platform.platform, ""),
+        "kernel": _safe(platform.release, ""),
+        "arch": _safe(platform.machine, ""),
+        "python": platform.python_version(),
+        "ips": local_ips(),
+        "uptime_seconds": _uptime_seconds(),
+        "loadavg": _loadavg(),
+        "cpu_count": _safe(os.cpu_count),
+        "cpu_percent": cpu_percent,
+        "memory": _memory(),
+        "swap": _swap(),
+        "disk": _disk(),
+    }
+
+
+def _net_interfaces() -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    if psutil is not None:
+        stats = _safe(psutil.net_if_stats, {}) or {}
+        addrs = _safe(psutil.net_if_addrs, {}) or {}

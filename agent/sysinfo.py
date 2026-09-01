@@ -196,3 +196,24 @@ def _net_interfaces() -> list[dict[str, Any]]:
     if psutil is not None:
         stats = _safe(psutil.net_if_stats, {}) or {}
         addrs = _safe(psutil.net_if_addrs, {}) or {}
+        counters = _safe(psutil.net_io_counters, None)
+        per_nic = _safe(lambda: psutil.net_io_counters(pernic=True), {}) or {}
+        for name, nic in per_nic.items():
+            st = stats.get(name)
+            addresses = [
+                a.address
+                for a in addrs.get(name, [])
+                if a.family in (socket.AF_INET, socket.AF_INET6)
+            ]
+            result.append(
+                {
+                    "name": name,
+                    "up": bool(getattr(st, "isup", False)) if st else None,
+                    "speed": getattr(st, "speed", None) if st else None,
+                    "mtu": getattr(st, "mtu", None) if st else None,
+                    "addrs": addresses,
+                    "rx_bytes": nic.bytes_recv,
+                    "tx_bytes": nic.bytes_sent,
+                    "rx_packets": nic.packets_recv,
+                    "tx_packets": nic.packets_sent,
+                    "errors": nic.errin + nic.errout,

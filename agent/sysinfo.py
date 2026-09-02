@@ -217,3 +217,24 @@ def _net_interfaces() -> list[dict[str, Any]]:
                     "rx_packets": nic.packets_recv,
                     "tx_packets": nic.packets_sent,
                     "errors": nic.errin + nic.errout,
+                    "drops": nic.dropin + nic.dropout,
+                }
+            )
+        if result:
+            if counters is not None:
+                result.sort(key=lambda r: r["rx_bytes"] + r["tx_bytes"], reverse=True)
+            return result
+    # /proc/net/dev fallback
+    try:
+        lines = _read("/proc/net/dev").splitlines()[2:]
+    except Exception:
+        return result
+    for line in lines:
+        name, _, rest = line.partition(":")
+        fields = rest.split()
+        if len(fields) < 16:
+            continue
+        result.append(
+            {
+                "name": name.strip(),
+                "up": None,

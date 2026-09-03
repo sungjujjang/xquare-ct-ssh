@@ -238,3 +238,24 @@ def _net_interfaces() -> list[dict[str, Any]]:
             {
                 "name": name.strip(),
                 "up": None,
+                "speed": None,
+                "mtu": None,
+                "addrs": [],
+                "rx_bytes": int(fields[0]),
+                "tx_bytes": int(fields[8]),
+                "rx_packets": int(fields[1]),
+                "tx_packets": int(fields[9]),
+                "errors": int(fields[2]) + int(fields[10]),
+                "drops": int(fields[3]) + int(fields[11]),
+            }
+        )
+    return result
+
+
+def _listening() -> list[dict[str, Any]]:
+    if psutil is not None:
+        rows: list[dict[str, Any]] = []
+        for conn in _safe(lambda: psutil.net_connections(kind="inet"), []) or []:
+            if conn.status != psutil.CONN_LISTEN:
+                continue
+            laddr = conn.laddr

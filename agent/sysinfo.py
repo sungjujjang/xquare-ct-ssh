@@ -259,3 +259,24 @@ def _listening() -> list[dict[str, Any]]:
             if conn.status != psutil.CONN_LISTEN:
                 continue
             laddr = conn.laddr
+            address = getattr(laddr, "ip", None) or (laddr[0] if laddr else "")
+            port = getattr(laddr, "port", None) or (laddr[1] if laddr and len(laddr) > 1 else None)
+            name = None
+            if conn.pid:
+                name = _safe(lambda: psutil.Process(conn.pid).name())
+            rows.append(
+                {
+                    "proto": "tcp",
+                    "laddr": f"{address}:{port}",
+                    "state": "LISTEN",
+                    "pid": conn.pid,
+                    "process": name,
+                }
+            )
+        if rows:
+            rows.sort(key=lambda r: (r["pid"] is None, r["laddr"]))
+            return rows
+    return _proc_listen_ports()
+
+
+def collect_net() -> dict[str, Any]:

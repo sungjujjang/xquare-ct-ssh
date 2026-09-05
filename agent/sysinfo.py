@@ -280,3 +280,24 @@ def _listening() -> list[dict[str, Any]]:
 
 
 def collect_net() -> dict[str, Any]:
+    listening = _listening()
+    connection_count = None
+    if psutil is not None:
+        connection_count = _safe(lambda: len(psutil.net_connections(kind="inet")))
+    return {
+        "ips": local_ips(),
+        "interfaces": _net_interfaces(),
+        "listening": listening,
+        "connection_count": connection_count,
+    }
+
+
+def _proc_fallback(limit: int) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    try:
+        pids = [p for p in os.listdir("/proc") if p.isdigit()]
+    except Exception:
+        return rows
+    page = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
+    for pid in pids:
+        try:

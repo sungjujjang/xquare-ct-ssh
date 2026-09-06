@@ -301,3 +301,24 @@ def _proc_fallback(limit: int) -> list[dict[str, Any]]:
     page = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
     for pid in pids:
         try:
+            stat = _read(f"/proc/{pid}/stat")
+            rparen = stat.rfind(")")
+            name = stat[stat.find("(") + 1 : rparen]
+            rest = stat[rparen + 2 :].split()
+            rss = int(rest[21]) * page
+            utime, stime = int(rest[11]), int(rest[12])
+            rows.append(
+                {
+                    "pid": int(pid),
+                    "name": name,
+                    "username": None,
+                    "cpu_percent": None,
+                    "cpu_ticks": utime + stime,
+                    "memory_percent": None,
+                    "rss": rss,
+                }
+            )
+        except Exception:
+            continue
+    rows.sort(key=lambda r: r["cpu_ticks"], reverse=True)
+    return rows[:limit]

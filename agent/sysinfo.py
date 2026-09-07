@@ -322,3 +322,24 @@ def _proc_fallback(limit: int) -> list[dict[str, Any]]:
             continue
     rows.sort(key=lambda r: r["cpu_ticks"], reverse=True)
     return rows[:limit]
+
+
+def collect_procs(limit: int = 15) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    if psutil is not None:
+        procs = _safe(
+            lambda: list(psutil.process_iter(["pid", "name", "username", "memory_percent"])), []
+        ) or []
+        # Prime cpu_percent so the second read covers a real interval.
+        for proc in procs:
+            _safe(lambda p=proc: p.cpu_percent(interval=None))
+        time.sleep(0.1)
+        for proc in procs:
+            try:
+                info = proc.info
+                cpu = _safe(lambda p=proc: p.cpu_percent(interval=None), None)
+                rows.append(
+                    {
+                        "pid": info.get("pid"),
+                        "name": info.get("name"),
+                        "username": info.get("username"),

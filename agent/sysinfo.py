@@ -343,3 +343,24 @@ def collect_procs(limit: int = 15) -> dict[str, Any]:
                         "pid": info.get("pid"),
                         "name": info.get("name"),
                         "username": info.get("username"),
+                        "cpu_percent": round(cpu, 1) if cpu is not None else None,
+                        "memory_percent": round(info.get("memory_percent") or 0.0, 1),
+                        "rss": _safe(lambda p=proc: p.memory_info().rss, None),
+                    }
+                )
+            except Exception:
+                continue
+        rows.sort(key=lambda r: (r["cpu_percent"] or 0.0), reverse=True)
+    else:
+        rows = _proc_fallback(limit)
+    return {"processes": rows[: max(1, limit)]}
+
+
+_COLLECTORS: dict[str, Callable[..., dict[str, Any]]] = {
+    "info": collect_info,
+    "net": collect_net,
+    "procs": collect_procs,
+}
+
+
+def collect(cmd: str, args: dict[str, Any] | None = None) -> dict[str, Any]:

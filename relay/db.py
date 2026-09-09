@@ -187,6 +187,15 @@ class RegistryDB:
             return False
         return verify_secret(password, server.login_password_hash)
 
+    def set_server_login_password(self, name: str, password: str) -> bool:
+        """Change only a server's operator login password.  Returns True if found."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE servers SET login_password_hash = ? WHERE name = ?",
+                (hash_secret(password), name),
+            )
+        return cur.rowcount > 0
+
 
 def _row_to_server(row: sqlite3.Row) -> Server:
     return Server(

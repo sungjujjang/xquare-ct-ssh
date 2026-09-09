@@ -364,3 +364,11 @@ _COLLECTORS: dict[str, Callable[..., dict[str, Any]]] = {
 
 
 def collect(cmd: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Dispatch a SYSINFO request; raises ``ValueError`` on an unknown command."""
+    args = args or {}
+    if cmd == "procs":
+        return collect_procs(int(args.get("n") or 15))
+    collector = _COLLECTORS.get(cmd)
+    if collector is None:
+        raise ValueError(f"unknown sysinfo command: {cmd}")
+    return collector()

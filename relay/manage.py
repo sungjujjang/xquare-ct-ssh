@@ -12,6 +12,8 @@ Examples::
     python -m relay.manage users
     python -m relay.manage remove-user alice
     python -m relay.manage reset-token server-001
+    python -m relay.manage set-password server-001       # change a server login password
+    python -m relay.manage set-user-password alice       # change an operator password
 """
 
 from __future__ import annotations
@@ -176,6 +178,8 @@ def cmd_remove_user(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_set_server_password(args: argparse.Namespace) -> int:
+    db = _open_db(args)
 def cmd_reset_token(args: argparse.Namespace) -> int:
     config = RelayConfig.load(args.config)
     if args.advertise_host:

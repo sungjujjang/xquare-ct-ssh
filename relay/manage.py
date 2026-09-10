@@ -180,6 +180,26 @@ def cmd_remove_user(args: argparse.Namespace) -> int:
 
 def cmd_set_server_password(args: argparse.Namespace) -> int:
     db = _open_db(args)
+    if db.get_server(args.name) is None:
+        print(f"server '{args.name}' not found", file=sys.stderr)
+        return 1
+    password = args.password or _prompt_password(f"New login password for server {args.name}: ")
+    db.set_server_login_password(args.name, password)
+    print(f"login password for server '{args.name}' updated")
+    return 0
+
+
+def cmd_set_user_password(args: argparse.Namespace) -> int:
+    db = _open_db(args)
+    if not db.relay_user_exists(args.username):
+        print(f"relay user '{args.username}' not found", file=sys.stderr)
+        return 1
+    password = args.password or _prompt_password(f"New password for operator {args.username}: ")
+    db.add_relay_user(args.username, password)
+    print(f"password for operator '{args.username}' updated")
+    return 0
+
+
 def cmd_reset_token(args: argparse.Namespace) -> int:
     config = RelayConfig.load(args.config)
     if args.advertise_host:
@@ -255,6 +275,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_token.add_argument("--ws-port", type=int)
     p_token.set_defaults(func=cmd_reset_token)
 
+    p_setpw = sub.add_parser("set-password", help="change a server's login password")
     return parser
 
 

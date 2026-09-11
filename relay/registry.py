@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import json
 import logging
 from typing import Any, Protocol
 
@@ -107,6 +108,7 @@ class AgentConnection:
         self.sessions: dict[int, SessionBridge] = {}
         self._send_lock = asyncio.Lock()
         self._closed = False
+        self._info_pending: dict[int, asyncio.Future] = {}
         self.connected_at = asyncio.get_event_loop().time()
 
     async def send(self, msg_type: int, session_id: int = 0, payload: bytes | str = b"") -> None:
@@ -124,6 +126,10 @@ class AgentConnection:
     def remove_session(self, session_id: int) -> None:
         self.sessions.pop(session_id, None)
 
+    async def request_sysinfo(self, cmd: str, args: dict[str, Any] | None = None, timeout: float = 10.0) -> dict[str, Any]:
+        """Ask the agent for ``info``/``net``/``procs`` data and await the reply."""
+        request_id = allocate_session_id()
+        future: asyncio.Future = asyncio.get_event_loop().create_future()
     async def handle_frame(self, raw: bytes) -> None:
         """Dispatch a frame received from the agent."""
         msg_type, session_id, payload = protocol.decode(raw)

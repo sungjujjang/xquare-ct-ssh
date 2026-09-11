@@ -276,6 +276,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_token.set_defaults(func=cmd_reset_token)
 
     p_setpw = sub.add_parser("set-password", help="change a server's login password")
+    p_setpw.add_argument("name")
+    p_setpw.add_argument("--password")
+    p_setpw.set_defaults(func=cmd_set_server_password)
+
+    p_setupw = sub.add_parser("set-user-password", help="change an operator's password")
+    p_setupw.add_argument("username")
+    p_setupw.add_argument("--password")
+    p_setupw.set_defaults(func=cmd_set_user_password)
+
     return parser
 
 

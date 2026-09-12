@@ -130,6 +130,15 @@ class AgentConnection:
         """Ask the agent for ``info``/``net``/``procs`` data and await the reply."""
         request_id = allocate_session_id()
         future: asyncio.Future = asyncio.get_event_loop().create_future()
+        self._info_pending[request_id] = future
+        try:
+            await self.send(protocol.SYSINFO, request_id, json.dumps({"cmd": cmd, "args": args or {}}))
+            return await asyncio.wait_for(future, timeout)
+        except asyncio.TimeoutError:
+            return {"cmd": cmd, "ok": False, "error": "agent did not respond in time", "data": None}
+        finally:
+            self._info_pending.pop(request_id, None)
+
     async def handle_frame(self, raw: bytes) -> None:
         """Dispatch a frame received from the agent."""
         msg_type, session_id, payload = protocol.decode(raw)
@@ -150,10 +159,21 @@ class AgentConnection:
                 await bridge.on_agent_close(payload)
         elif msg_type == protocol.PING:
             await self.send(protocol.PONG, session_id, b"")
+        elif msg_type == protocol.SYSINFO_RES:
+            future = self._info_pending.pop(session_id, None)
+            if future is not None and not future.done():
+                try:
+                    future.set_result(protocol.decode_json(payload))
+                except protocol.ProtocolError:
+                    future.set_result({"cmd": None, "ok": False, "error": "malformed SYSINFO_RES", "data": None})
         # PONG / EXIT / unknown frames are ignored.
 
     async def shutdown(self, reason: bytes = b"agent disconnected") -> None:
         self._closed = True
+        for future in self._info_pending.values():
+            if not future.done():
+                future.set_result({"cmd": None, "ok": False, "error": "agent disconnected", "data": None})
+        self._info_pending.clear()
         bridges = list(self.sessions.values())
         self.sessions.clear()
         for bridge in bridges:

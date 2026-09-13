@@ -46,6 +46,27 @@ log = logging.getLogger("relay.ssh")
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 
 
+def _human_bytes(value: object) -> str:
+    if value is None:
+        return "-"
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return str(value)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB", "PiB"):
+        if abs(number) < 1024 or unit == "PiB":
+            return f"{number:.0f} {unit}" if unit == "B" else f"{number:.1f} {unit}"
+        number /= 1024
+    return f"{number:.1f} PiB"
+
+
+def _human_duration(seconds: object) -> str:
+    if seconds is None:
+        return "-"
+    try:
+        total = int(float(seconds))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+
 
 def load_or_create_host_key(path: str) -> asyncssh.SSHKey:
     if not os.path.exists(path):

@@ -66,6 +66,15 @@ def _human_duration(seconds: object) -> str:
     try:
         total = int(float(seconds))  # type: ignore[arg-type]
     except (TypeError, ValueError):
+        return str(seconds)
+    days, rem = divmod(total, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, _ = divmod(rem, 60)
+    if days:
+        return f"{days}d {hours}h {minutes}m"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
 
 
 def load_or_create_host_key(path: str) -> asyncssh.SSHKey:
@@ -137,6 +146,11 @@ class RelaySession(asyncssh.SSHServerSession):
         self._writer: ChannelWriter | None = None
         self._inbound: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._task: asyncio.Task | None = None
+        self._exec_command: str | None = None
+        self._exec_target: str | None = None
+        # Set once the client tells us whether it wants a shell or ran an exec
+        # command, so we know whether to show the C2 menu or attach directly.
+        self._session_mode_ready = asyncio.Event()
 
         self._term_type = config.default_term
         self._cols = 80
@@ -171,9 +185,15 @@ class RelaySession(asyncssh.SSHServerSession):
         return True
 
     def shell_requested(self) -> bool:
+        self._session_mode_ready.set()
         return True
 
     def exec_requested(self, command: str) -> bool:
+        # `ssh -t operator@relay attach <server>` (or just `<server>`) attaches
+        # straight to that server's shell, skipping the C2 menu entirely.
+        self._exec_command = command
+        self._exec_target = self._parse_exec(command)
+        self._session_mode_ready.set()
         return True
 
     def terminal_size_changed(self, width, height, pixwidth, pixheight) -> None:

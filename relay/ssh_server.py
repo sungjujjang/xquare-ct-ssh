@@ -246,9 +246,18 @@ class RelaySession(asyncssh.SSHServerSession):
             if self.direct_server is not None:
                 await self._attach_direct(self.direct_server)
             else:
-                self._emit_text(self.config.banner)
-                self._editor.set_prompt(self._prompt)
-                self._editor.render_prompt()
+                # Wait (briefly) for the client to tell us shell-vs-exec so we
+                # don't flash the C2 menu before an exec attach.
+                try:
+                    await asyncio.wait_for(self._session_mode_ready.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass
+                if self._exec_target is not None:
+                    await self._attach_admin(self._exec_target)
+                else:
+                    self._emit_text(self.config.banner)
+                    self._editor.set_prompt(self._prompt)
+                    self._editor.render_prompt()
             while not self._exit_requested:
                 data = await self._inbound.get()
                 if data is None:
@@ -327,6 +336,11 @@ class RelaySession(asyncssh.SSHServerSession):
             await self._cmd_add_user(args)
         elif command in ("remove-user", "del-user", "remove-admin"):
             await self._cmd_remove_user(args)
+        elif command in ("passwd", "password", "passwd-me"):
+            await self._cmd_passwd(args)
+        elif command in ("reset-password", "reset-passwd", "set-user-password"):
+            await self._cmd_reset_password(args)
+        elif command in ("set-password", "server-password"):
         elif command in ("logs", "log", "tail"):
             self._cmd_logs(args)
         elif command in ("whoami", "me"):

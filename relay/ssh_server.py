@@ -341,6 +341,15 @@ class RelaySession(asyncssh.SSHServerSession):
         elif command in ("reset-password", "reset-passwd", "set-user-password"):
             await self._cmd_reset_password(args)
         elif command in ("set-password", "server-password"):
+            await self._cmd_set_server_password(args)
+        elif command in ("info", "sysinfo"):
+            await self._cmd_info(args)
+        elif command in ("net", "netstat", "network"):
+            await self._cmd_net(args)
+        elif command in ("procs", "ps", "top"):
+            await self._cmd_procs(args)
+        elif command in ("overview", "fleet", "all"):
+            await self._cmd_overview(args)
         elif command in ("logs", "log", "tail"):
             self._cmd_logs(args)
         elif command in ("whoami", "me"):
@@ -363,15 +372,22 @@ class RelaySession(asyncssh.SSHServerSession):
             "  \x1b[36mlist\x1b[0m                        list known internal servers\r\n"
             "  \x1b[36msessions\x1b[0m                    show live session counts per server\r\n"
             "  \x1b[36madd-server <id> [pw]\x1b[0m        create a server and print its one-line installer\r\n"
-            "  \x1b[36mlogin <server> [pw]\x1b[0m          attach to a server's shell\r\n"
+            "  \x1b[36mlogin <server> [pw]\x1b[0m          attach to a server's shell (admin: no pw needed)\r\n"
             "  \x1b[36menable\x1b[0m <server>             allow the server / agent to connect\r\n"
             "  \x1b[36mdisable\x1b[0m <server>            block the server and drop its agent\r\n"
             "  \x1b[36mremove-server\x1b[0m <server>      delete a server and its credentials\r\n"
             "  \x1b[36mkick\x1b[0m <server>                drop the live agent connection\r\n"
             "  \x1b[36mreset-token\x1b[0m <server>          rotate the agent token and reprint the installer\r\n"
+            "  \x1b[36moverview\x1b[0m (`fleet`)             all servers' resources at a glance\r\n"
             "  \x1b[36musers\x1b[0m                       list operator accounts\r\n"
             "  \x1b[36madd-user\x1b[0m <name> [pw]          create/update an operator account\r\n"
             "  \x1b[36mremove-user\x1b[0m <name>            delete an operator account\r\n"
+            "  \x1b[36mpasswd\x1b[0m [pw]                   change your own operator password\r\n"
+            "  \x1b[36mreset-password\x1b[0m <name> [pw]    set another operator's password\r\n"
+            "  \x1b[36mset-password\x1b[0m <server> [pw]    change a server's login password\r\n"
+            "  \x1b[36minfo\x1b[0m <server>                host, CPU, memory and disk summary\r\n"
+            "  \x1b[36mnet\x1b[0m <server>                 interfaces, listening ports, connections\r\n"
+            "  \x1b[36mprocs\x1b[0m <server> [n]             top n processes by CPU (default 15)\r\n"
             "  \x1b[36mlogs\x1b[0m [n]                    show the last n relay log lines\r\n"
             "  \x1b[36mwhoami\x1b[0m                      show which account you are using\r\n"
             "  \x1b[36mping\x1b[0m                        check the C2 CLI is responsive\r\n"
@@ -499,8 +515,6 @@ class RelaySession(asyncssh.SSHServerSession):
             self._emit_text(f"server {name} is disabled\r\n")
             return
 
-        if password is None:
-            password = await self._read_password(f"Password for {name}: ")
             if password is None:
                 self._emit_text("cancelled\r\n")
                 return

@@ -515,17 +515,27 @@ class RelaySession(asyncssh.SSHServerSession):
             self._emit_text(f"server {name} is disabled\r\n")
             return
 
-            if password is None:
-                self._emit_text("cancelled\r\n")
-                return
-
-        if not self.db.verify_server_login(name, password):
+        # Operators are already authenticated against the relay, so they may
+        # attach without the per-server login password.  An explicit password is
+        # still accepted (and verified) for scripted/back-compat use.
+        if password is not None and not self.db.verify_server_login(name, password):
             self._emit_text("\x1b[31mauthentication failed\x1b[0m\r\n")
             return
 
         if await self._open_bridge(name):
             self._emit_text(f"\r\n\x1b[32mConnected to {name}\x1b[0m\r\n\r\n")
 
+    @staticmethod
+    def _parse_exec(command: str | None) -> str | None:
+        """Interpret an SSH exec command as an admin attach target."""
+        if not command:
+            return None
+        parts = command.strip().split()
+        if not parts:
+            return None
+        if parts[0] in ("attach", "login", "connect") and len(parts) > 1:
+            return parts[1]
+        if len(parts) == 1 and _NAME_RE.match(parts[0]):
     async def _attach_direct(self, name: str) -> None:
         """Non-admin path: go straight into the named server's shell."""
         server = self.db.get_server(name)

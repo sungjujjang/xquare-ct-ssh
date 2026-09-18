@@ -536,6 +536,23 @@ class RelaySession(asyncssh.SSHServerSession):
         if parts[0] in ("attach", "login", "connect") and len(parts) > 1:
             return parts[1]
         if len(parts) == 1 and _NAME_RE.match(parts[0]):
+            return parts[0]
+        return None
+
+    async def _attach_admin(self, name: str) -> None:
+        """Exec path: attach as an authenticated operator (no server password)."""
+        server = self.db.get_server(name)
+        if server is None:
+            self._emit_text(f"\x1b[31munknown server:\x1b[0m {name}\r\n")
+            self._exit_requested = True
+            return
+        if not server.enabled:
+            self._emit_text(f"\x1b[31mserver {name} is disabled\x1b[0m\r\n")
+            self._exit_requested = True
+            return
+        if not await self._open_bridge(name):
+            self._exit_requested = True
+
     async def _attach_direct(self, name: str) -> None:
         """Non-admin path: go straight into the named server's shell."""
         server = self.db.get_server(name)
@@ -700,6 +717,9 @@ class RelaySession(asyncssh.SSHServerSession):
         self.db.remove_relay_user(name)
         self._emit_text(f"operator '{name}' removed\r\n")
 
+    async def _cmd_passwd(self, args: list[str]) -> None:
+        new = args[0] if args else None
+        if new is None:
     def _cmd_logs(self, args: list[str]) -> None:
         count = 100
         if args:

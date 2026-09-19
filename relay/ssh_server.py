@@ -720,6 +720,26 @@ class RelaySession(asyncssh.SSHServerSession):
     async def _cmd_passwd(self, args: list[str]) -> None:
         new = args[0] if args else None
         if new is None:
+            new = await self._read_password("New password: ")
+            if new is None:
+                self._emit_text("cancelled\r\n")
+                return
+            confirm = await self._read_password("Confirm password: ")
+            if confirm is None:
+                self._emit_text("cancelled\r\n")
+                return
+            if confirm != new:
+                self._emit_text("\x1b[31mpasswords do not match\x1b[0m\r\n")
+                return
+        if not new:
+            self._emit_text("password must not be empty\r\n")
+            return
+        self.db.add_relay_user(self.username, new)
+        self._emit_text("\x1b[32mpassword changed\x1b[0m (applies to your next login)\r\n")
+
+    async def _cmd_reset_password(self, args: list[str]) -> None:
+        if not args:
+            self._emit_text("usage: reset-password <operator> [password]\r\n")
     def _cmd_logs(self, args: list[str]) -> None:
         count = 100
         if args:

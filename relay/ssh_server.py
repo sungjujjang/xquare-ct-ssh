@@ -740,6 +740,26 @@ class RelaySession(asyncssh.SSHServerSession):
     async def _cmd_reset_password(self, args: list[str]) -> None:
         if not args:
             self._emit_text("usage: reset-password <operator> [password]\r\n")
+            return
+        name = args[0]
+        if not self.db.relay_user_exists(name):
+            self._emit_text(f"\x1b[31munknown operator:\x1b[0m {name}\r\n")
+            return
+        new = args[1] if len(args) > 1 else None
+        if new is None:
+            new = await self._read_password(f"New password for operator {name}: ")
+            if new is None:
+                self._emit_text("cancelled\r\n")
+                return
+        if not new:
+            self._emit_text("password must not be empty\r\n")
+            return
+        self.db.add_relay_user(name, new)
+        self._emit_text(f"\x1b[32mpassword for operator '{name}' updated.\x1b[0m\r\n")
+
+    async def _cmd_set_server_password(self, args: list[str]) -> None:
+        if not args:
+            self._emit_text("usage: set-password <server> [password]\r\n")
     def _cmd_logs(self, args: list[str]) -> None:
         count = 100
         if args:

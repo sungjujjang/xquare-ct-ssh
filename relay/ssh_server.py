@@ -780,6 +780,26 @@ class RelaySession(asyncssh.SSHServerSession):
             "(direct SSH login and 'login' use it)\r\n"
         )
 
+    async def _sysinfo(self, name: str, cmd: str, args: dict | None = None) -> dict | None:
+        agent = self.registry.get(name)
+        if agent is None or agent.closed:
+            self._emit_text(f"server {name} is offline (agent not connected)\r\n")
+            return None
+        self._emit_text(f"querying {name}...\r\n")
+        try:
+            reply = await agent.request_sysinfo(cmd, args)
+        except (ConnectionError, OSError) as exc:
+            self._emit_text(f"\x1b[31m{name}: {exc}\x1b[0m\r\n")
+            return None
+        if not reply or not reply.get("ok"):
+            error = (reply or {}).get("error") or "request failed"
+            self._emit_text(f"\x1b[31m{name}: {error}\x1b[0m\r\n")
+            return None
+        return reply.get("data") or {}
+
+    async def _cmd_info(self, args: list[str]) -> None:
+        if not args:
+            self._emit_text("usage: info <server>\r\n")
     def _cmd_logs(self, args: list[str]) -> None:
         count = 100
         if args:

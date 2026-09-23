@@ -800,6 +800,26 @@ class RelaySession(asyncssh.SSHServerSession):
     async def _cmd_info(self, args: list[str]) -> None:
         if not args:
             self._emit_text("usage: info <server>\r\n")
+            return
+        name = args[0]
+        data = await self._sysinfo(name, "info")
+        if data is None:
+            return
+        self._print_info(name, data)
+
+    async def _cmd_net(self, args: list[str]) -> None:
+        if not args:
+            self._emit_text("usage: net <server>\r\n")
+            return
+        name = args[0]
+        data = await self._sysinfo(name, "net")
+        if data is None:
+            return
+        self._print_net(name, data)
+
+    async def _cmd_procs(self, args: list[str]) -> None:
+        if not args:
+            self._emit_text("usage: procs <server> [n]\r\n")
     def _cmd_logs(self, args: list[str]) -> None:
         count = 100
         if args:

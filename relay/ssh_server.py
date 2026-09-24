@@ -820,6 +820,26 @@ class RelaySession(asyncssh.SSHServerSession):
     async def _cmd_procs(self, args: list[str]) -> None:
         if not args:
             self._emit_text("usage: procs <server> [n]\r\n")
+            return
+        name = args[0]
+        limit = 15
+        if len(args) > 1:
+            try:
+                limit = max(1, min(int(args[1]), 100))
+            except ValueError:
+                pass
+        data = await self._sysinfo(name, "procs", {"n": limit})
+        if data is None:
+            return
+        self._print_procs(name, data)
+
+    def _print_info(self, name: str, data: dict) -> None:
+        self._emit_text(
+            f"\r\n\x1b[1m{name}\x1b[0m  {data.get('hostname', '')}  {data.get('os', '')}\r\n"
+        )
+        ips = ", ".join(data.get("ips") or []) or "-"
+        self._emit_text(f"  {'kernel':<10} {data.get('kernel', '')} ({data.get('arch', '')})\r\n")
+        self._emit_text(f"  {'python':<10} {data.get('python', '')}\r\n")
     def _cmd_logs(self, args: list[str]) -> None:
         count = 100
         if args:

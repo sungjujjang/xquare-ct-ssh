@@ -840,6 +840,26 @@ class RelaySession(asyncssh.SSHServerSession):
         ips = ", ".join(data.get("ips") or []) or "-"
         self._emit_text(f"  {'kernel':<10} {data.get('kernel', '')} ({data.get('arch', '')})\r\n")
         self._emit_text(f"  {'python':<10} {data.get('python', '')}\r\n")
+        self._emit_text(f"  {'ips':<10} {ips}\r\n")
+        self._emit_text(f"  {'uptime':<10} {_human_duration(data.get('uptime_seconds'))}\r\n")
+        load = data.get("loadavg")
+        load_s = " ".join(f"{x:g}" for x in load) if load else "-"
+        cpu = data.get("cpu_percent")
+        cpu_s = f"{cpu:.0f}%" if isinstance(cpu, (int, float)) else "-"
+        self._emit_text(
+            f"  {'load':<10} {load_s}   cpu {cpu_s}   {data.get('cpu_count') or '?'} cores\r\n"
+        )
+        mem = data.get("memory")
+        if mem:
+            self._emit_text(
+                f"  {'memory':<10} {_human_bytes(mem.get('used'))} / {_human_bytes(mem.get('total'))} "
+                f"({(mem.get('percent') or 0):.0f}%)\r\n"
+            )
+        swap = data.get("swap")
+        if swap and swap.get("total"):
+            self._emit_text(
+                f"  {'swap':<10} {_human_bytes(swap.get('used'))} / {_human_bytes(swap.get('total'))} "
+                f"({(swap.get('percent') or 0):.0f}%)\r\n"
     def _cmd_logs(self, args: list[str]) -> None:
         count = 100
         if args:

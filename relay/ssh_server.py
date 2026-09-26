@@ -860,6 +860,26 @@ class RelaySession(asyncssh.SSHServerSession):
             self._emit_text(
                 f"  {'swap':<10} {_human_bytes(swap.get('used'))} / {_human_bytes(swap.get('total'))} "
                 f"({(swap.get('percent') or 0):.0f}%)\r\n"
+            )
+        for disk in data.get("disk") or []:
+            self._emit_text(
+                f"  {'disk':<10} {disk.get('path', ''):<16} {_human_bytes(disk.get('used'))} / "
+                f"{_human_bytes(disk.get('total'))} ({(disk.get('percent') or 0):.0f}%)\r\n"
+            )
+        self._emit_text("\r\n")
+
+    def _print_net(self, name: str, data: dict) -> None:
+        self._emit_text(f"\r\n\x1b[1mInterfaces\x1b[0m ({name})\r\n")
+        interfaces = data.get("interfaces") or []
+        if not interfaces:
+            self._emit_text("  (none reported)\r\n")
+        else:
+            self._emit_text(f"  {'NAME':<12} {'UP':<4} {'RX':>10} {'TX':>10}  ADDRS\r\n")
+            for iface in interfaces:
+                up = "yes" if iface.get("up") else ("no" if iface.get("up") is False else "?")
+                addrs = ", ".join(iface.get("addrs") or [])
+                self._emit_text(
+                    f"  {str(iface.get('name', '')):<12} {up:<4} "
     def _cmd_logs(self, args: list[str]) -> None:
         count = 100
         if args:

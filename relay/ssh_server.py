@@ -880,6 +880,26 @@ class RelaySession(asyncssh.SSHServerSession):
                 addrs = ", ".join(iface.get("addrs") or [])
                 self._emit_text(
                     f"  {str(iface.get('name', '')):<12} {up:<4} "
+                    f"{_human_bytes(iface.get('rx_bytes')):>10} "
+                    f"{_human_bytes(iface.get('tx_bytes')):>10}  {addrs}\r\n"
+                )
+        listening = data.get("listening") or []
+        self._emit_text(f"\r\n\x1b[1mListening\x1b[0m ({len(listening)})\r\n")
+        for row in listening[:30]:
+            pid = row.get("pid")
+            pid_s = f"pid {pid}" if pid else ""
+            self._emit_text(
+                f"  {str(row.get('proto', 'tcp')):<4} {str(row.get('laddr', '')):<24} "
+                f"{pid_s:<9} {row.get('process') or ''}\r\n"
+            )
+        if len(listening) > 30:
+            self._emit_text(f"  ... {len(listening) - 30} more\r\n")
+        count = data.get("connection_count")
+        if count is not None:
+            self._emit_text(f"\r\n  connections: {count}\r\n")
+        self._emit_text("\r\n")
+
+    def _print_procs(self, name: str, data: dict) -> None:
     def _cmd_logs(self, args: list[str]) -> None:
         count = 100
         if args:

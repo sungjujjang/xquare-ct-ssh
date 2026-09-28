@@ -900,6 +900,26 @@ class RelaySession(asyncssh.SSHServerSession):
         self._emit_text("\r\n")
 
     def _print_procs(self, name: str, data: dict) -> None:
+        rows = data.get("processes") or []
+        self._emit_text(f"\r\n\x1b[1mTop processes\x1b[0m ({name})\r\n")
+        self._emit_text(f"  {'PID':>7}  {'CPU%':>5}  {'MEM%':>5}  {'USER':<12} NAME\r\n")
+        for proc in rows:
+            cpu = f"{proc['cpu_percent']:.1f}" if isinstance(proc.get("cpu_percent"), (int, float)) else "-"
+            memp = (
+                f"{proc['memory_percent']:.1f}"
+                if isinstance(proc.get("memory_percent"), (int, float))
+                else "-"
+            )
+            user = str(proc.get("username") or "")[:12]
+            self._emit_text(
+                f"  {str(proc.get('pid', '')):>7}  {cpu:>5}  {memp:>5}  {user:<12} {proc.get('name', '')}\r\n"
+            )
+        self._emit_text("\r\n")
+
+    async def _fetch_info(self, name: str) -> dict | None:
+        agent = self.registry.get(name)
+        if agent is None or agent.closed:
+            return None
     def _cmd_logs(self, args: list[str]) -> None:
         count = 100
         if args:

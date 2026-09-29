@@ -920,6 +920,26 @@ class RelaySession(asyncssh.SSHServerSession):
         agent = self.registry.get(name)
         if agent is None or agent.closed:
             return None
+        try:
+            reply = await agent.request_sysinfo("info", timeout=8.0)
+        except (ConnectionError, OSError):
+            return None
+        if not reply or not reply.get("ok"):
+            return None
+        return reply.get("data") or {}
+
+    async def _cmd_overview(self, args: list[str]) -> None:
+        servers = self.db.list_servers()
+        if not servers:
+            self._emit_text("No servers registered.\r\n")
+            return
+        online = [s.name for s in servers if s.enabled and self.registry.is_online(s.name)]
+        if online:
+            self._emit_text(f"gathering resources from {len(online)} online server(s)...\r\n")
+        infos = await asyncio.gather(*(self._fetch_info(name) for name in online))
+        self._print_overview(servers, dict(zip(online, infos)))
+
+    def _print_overview(self, servers, infos: dict[str, dict | None]) -> None:
     def _cmd_logs(self, args: list[str]) -> None:
         count = 100
         if args:

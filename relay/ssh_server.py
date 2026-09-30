@@ -940,6 +940,26 @@ class RelaySession(asyncssh.SSHServerSession):
         self._print_overview(servers, dict(zip(online, infos)))
 
     def _print_overview(self, servers, infos: dict[str, dict | None]) -> None:
+        self._emit_text(
+            "\r\n\x1b[1m  "
+            f"{'SERVER':<16} {'HOST':<16} {'IP':<15} {'UPTIME':<11} "
+            f"{'LOAD':>5} {'CPU':>4} {'MEM':>4} {'DISK':>4}\x1b[0m\r\n"
+        )
+        for server in servers:
+            if not server.enabled:
+                self._emit_text(f"  {server.name:<16} \x1b[33m(disabled)\x1b[0m\r\n")
+                continue
+            data = infos.get(server.name)
+            if data is None:
+                self._emit_text(f"  {server.name:<16} \x1b[31m(offline)\x1b[0m\r\n")
+                continue
+            host = str(data.get("hostname") or "")[:16]
+            ips = data.get("ips") or []
+            ip = str(ips[0])[:15] if ips else "-"
+            uptime = _human_duration(data.get("uptime_seconds"))
+            load = data.get("loadavg") or []
+            load_s = f"{load[0]:g}" if load else "-"
+            cpu = data.get("cpu_percent")
     def _cmd_logs(self, args: list[str]) -> None:
         count = 100
         if args:

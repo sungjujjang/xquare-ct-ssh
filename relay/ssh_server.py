@@ -960,6 +960,17 @@ class RelaySession(asyncssh.SSHServerSession):
             load = data.get("loadavg") or []
             load_s = f"{load[0]:g}" if load else "-"
             cpu = data.get("cpu_percent")
+            cpu_s = f"{cpu:.0f}%" if isinstance(cpu, (int, float)) else "-"
+            mem = data.get("memory") or {}
+            mem_s = f"{(mem.get('percent') or 0):.0f}%" if mem else "-"
+            disks = data.get("disk") or []
+            disk_s = f"{(disks[0].get('percent') or 0):.0f}%" if disks else "-"
+            self._emit_text(
+                f"  {server.name:<16} {host:<16} {ip:<15} {uptime:<11} "
+                f"{load_s:>5} {cpu_s:>4} {mem_s:>4} {disk_s:>4}\r\n"
+            )
+        self._emit_text("\r\n")
+
     def _cmd_logs(self, args: list[str]) -> None:
         count = 100
         if args:
@@ -1010,7 +1021,8 @@ class RelaySession(asyncssh.SSHServerSession):
         commands = [
             "help", "list", "sessions", "add-server", "login", "enable", "disable",
             "remove-server", "kick", "reset-token", "users", "add-user",
-            "remove-user", "logs", "whoami", "ping", "exit",
+            "remove-user", "passwd", "reset-password", "set-password",
+            "info", "net", "procs", "overview", "logs", "whoami", "ping", "exit",
         ]
         # completing the command itself
         if " " not in prefix:
@@ -1019,10 +1031,12 @@ class RelaySession(asyncssh.SSHServerSession):
         command = parts[0]
         word = "" if prefix.endswith(" ") else parts[-1]
         if command in ("login", "connect", "attach", "enable", "disable", "remove-server",
-                       "del-server", "delete", "kick", "reset-token", "rotate-token"):
+                       "del-server", "delete", "kick", "reset-token", "rotate-token",
+                       "set-password", "server-password", "info", "sysinfo", "net",
+                       "netstat", "network", "procs", "ps", "top"):
             names = [s.name for s in self.db.list_servers()]
             return [n for n in names if n.startswith(word)]
-        if command in ("remove-user", "del-user", "remove-admin"):
+        if command in ("remove-user", "del-user", "remove-admin",
             names = self.db.list_relay_users()
             return [n for n in names if n.startswith(word)]
         return []

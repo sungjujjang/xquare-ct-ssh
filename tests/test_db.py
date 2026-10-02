@@ -51,3 +51,22 @@ def test_rotate_server_token():
     assert db.verify_agent_token("s2", new)
     assert not db.verify_agent_token("s2", "old")
     assert db.rotate_server_token("missing") is None
+
+
+def test_set_server_login_password():
+    db = _db()
+    db.add_server("s3", "opsecret", token="t3")
+    assert db.set_server_login_password("s3", "newsecret")
+    assert db.verify_server_login("s3", "newsecret")
+    assert not db.verify_server_login("s3", "opsecret")
+    # the agent token is untouched
+    assert db.verify_agent_token("s3", "t3")
+    assert not db.set_server_login_password("missing", "x")
+
+
+def test_change_operator_password():
+    db = _db()
+    db.add_relay_user("carol", "first")
+    assert db.verify_relay_user("carol", "first")
+    db.add_relay_user("carol", "second")
+    assert db.verify_relay_user("carol", "second")

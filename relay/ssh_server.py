@@ -1037,6 +1037,7 @@ class RelaySession(asyncssh.SSHServerSession):
             names = [s.name for s in self.db.list_servers()]
             return [n for n in names if n.startswith(word)]
         if command in ("remove-user", "del-user", "remove-admin",
+                       "reset-password", "reset-passwd", "set-user-password"):
             names = self.db.list_relay_users()
             return [n for n in names if n.startswith(word)]
         return []

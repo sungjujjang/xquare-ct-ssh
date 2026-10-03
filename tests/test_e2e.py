@@ -111,6 +111,14 @@ async def _scenario() -> None:
                 proc.stdin.write(b"add-server brand-new secret1\n")
                 await out.until(b"http://127.0.0.1:1234/install/brand-new?token=")
 
+                # password management
+                proc.stdin.write(b"set-password brand-new brandpw\n")
+                await out.until(b"login password for 'brand-new' updated")
+                proc.stdin.write(b"reset-password admin admin2\n")
+                await out.until(b"password for operator 'admin' updated")
+                proc.stdin.write(b"passwd adminpw3\n")
+                await out.until(b"password changed")
+
                 # operator account management
                 proc.stdin.write(b"users\n")
                 await out.until(b"admin")
@@ -131,7 +139,16 @@ async def _scenario() -> None:
                 proc.stdin.write(b"logs 5\n")
                 await out.until(b"\r\n")
 
-                proc.stdin.write(b"login server-001 opsecret\n")
+                # devops tools query the agent over the control channel
+                proc.stdin.write(b"info server-001\n")
+                await out.until(b"cores", timeout=15)
+                proc.stdin.write(b"net server-001\n")
+                await out.until(b"Listening", timeout=15)
+                proc.stdin.write(b"procs server-001 5\n")
+                await out.until(b"Top processes", timeout=15)
+
+                # fleet-wide resource overview
+                proc.stdin.write(b"overview\n")
                 await out.until(b"Connected to server-001")
                 await out.until(b"$")
 

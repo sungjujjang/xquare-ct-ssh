@@ -70,3 +70,4 @@ def test_change_operator_password():
     assert db.verify_relay_user("carol", "first")
     db.add_relay_user("carol", "second")
     assert db.verify_relay_user("carol", "second")
+    assert not db.verify_relay_user("carol", "first")

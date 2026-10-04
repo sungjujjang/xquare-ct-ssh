@@ -149,6 +149,11 @@ async def _scenario() -> None:
 
                 # fleet-wide resource overview
                 proc.stdin.write(b"overview\n")
+                await out.until(b"UPTIME", timeout=15)
+                await out.until(b"server-001")
+
+                # admins attach without the per-server login password
+                proc.stdin.write(b"login server-001\n")
                 await out.until(b"Connected to server-001")
                 await out.until(b"$")
 
@@ -214,6 +219,21 @@ async def _scenario() -> None:
                 await out.until(b"DIRECT_OK_MARKER")
                 proc.stdin.write(b"exit\n")
                 await asyncio.sleep(0.2)
+
+            # admin exec attach: `ssh -t operator@relay attach <server>` jumps
+            # straight into the shell with no C2 menu and no server password
+            async with asyncssh.connect(
+                "127.0.0.1",
+                port=ssh_port,
+                username="admin",
+                password="adminpw3",
+                known_hosts=None,
+            ) as conn:
+                proc = await conn.create_process(
+                    "attach server-001",
+                    term_type="xterm-256color",
+                    term_size=(100, 30),
+                    encoding=None,
         finally:
             agent.stop()
             agent_task.cancel()

@@ -234,6 +234,13 @@ async def _scenario() -> None:
                     term_type="xterm-256color",
                     term_size=(100, 30),
                     encoding=None,
+                )
+                out = Expect(proc.stdout)
+                await out.until(b"$")
+                proc.stdin.write(b"echo EXEC_ATTACH_OK\n")
+                await out.until(b"EXEC_ATTACH_OK")
+                proc.stdin.write(b"exit\n")
+                await asyncio.sleep(0.2)
         finally:
             agent.stop()
             agent_task.cancel()

@@ -101,6 +101,23 @@ class RegistryDB:
             ).fetchone()
         return row is not None
 
+    def list_relay_users(self) -> list[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT username FROM relay_users ORDER BY username"
+            ).fetchall()
+        return [row["username"] for row in rows]
+
+    def remove_relay_user(self, username: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM relay_users WHERE username = ?", (username,))
+        return cur.rowcount > 0
+
+    def count_relay_users(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS n FROM relay_users").fetchone()
+        return int(row["n"])
+
     # -- internal servers --------------------------------------------------
     def add_server(
         self,
@@ -137,6 +154,16 @@ class RegistryDB:
         with self._connect() as conn:
             cur = conn.execute("DELETE FROM servers WHERE name = ?", (name,))
         return cur.rowcount > 0
+
+    def rotate_server_token(self, name: str, token: str | None = None) -> str | None:
+        """Replace a server's agent token.  Returns the new plaintext token."""
+        token = token or new_token()
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE servers SET token_hash = ? WHERE name = ?",
+                (hash_secret(token), name),
+            )
+        return token if cur.rowcount > 0 else None
 
     def get_server(self, name: str) -> Server | None:
         with self._connect() as conn:

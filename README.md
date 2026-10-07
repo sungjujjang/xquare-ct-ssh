@@ -39,6 +39,8 @@ Internal Agent  ── PTY (pty.fork / ConPTY) ──► 실제 Shell
 | 긴 출력 실시간 스트리밍 | 비동기 큐 + `pause_writing`/`resume_writing` 기반 역압(backpressure) |
 | interactive shell | `pty.fork()` (POSIX) / ConPTY (Windows) |
 | Windows (`cls`, `powershell`, `cmd`) | `agent/pty_backend.py` `WindowsPty` (pywinpty/ConPTY) |
+| 운영자 C2 관리 UI (목록/생성/활성화/삭제/kick/토큰재발급/계정/로그) | `relay/ssh_server.py` (C2 명령) + `relay/registry.py` `disconnect` + `relay/logs.py` |
+| 비관리자: 서버 id+비밀번호로 해당 셸 직행 | `relay/ssh_server.py` `validate_password` → `RelaySession._attach_direct` |
 
 ---
 
@@ -52,11 +54,12 @@ Internal Agent  ── PTY (pty.fork / ConPTY) ──► 실제 Shell
 ```
 relay/                      # 중계(릴레이) 서버 - 독립 배포 가능
   __main__.py               엔트리포인트 (SSH + WebSocket + 설치 웹 동시 기동)
-  ssh_server.py             SSH 서버, C2 세션/CLI, add-server, 브리지 전환
+  ssh_server.py             SSH 서버, C2 세션/CLI, add-server, 비관리자 직행, 브리지 전환
   lineeditor.py             C2 CLI 라인 에디터 (히스토리/완성/제어문자)
   ws_server.py              에이전트 WebSocket 수신 + 인증
   web.py                    설치 웹 서버 (1234): 원라이너 설치 스크립트 제공
-  registry.py               에이전트 연결/세션 브리지 레지스트리
+  registry.py               에이전트 연결/세션 브리지 레지스트리 (+ kick/disconnect)
+  logs.py                   최근 로그 인메모리 링버퍼 (C2 'logs' 명령)
   db.py                     SQLite (서버/운영자 자격증명, 해시 저장)
   security.py               PBKDF2 해시 / 토큰
   config.py                 YAML + 환경변수 설정
@@ -71,7 +74,7 @@ agent/                      # 내부 에이전트 - 독립 배포 가능
   protocol.py               공통 프레이밍 (vendored 복사본)
   requirements.txt          에이전트 의존성
   setup.sh                  Ubuntu 설치 스크립트 (systemd, 원라이너가 호출)
-tests/                      프로토콜/보안/에디터/웹 단위 테스트 + E2E 테스트
+tests/                      프로토콜/보안/에디터/DB/로그/웹 단위 테스트 + E2E 테스트
 ```
 
 
@@ -278,15 +281,18 @@ python -m agent --relay ws://relay-host:8765/agent --id win-001 --token xq_... -
 
 ### 4) 접속
 
+접속 방식은 두 가지입니다.
+
+**(a) 운영자(관리자)** — `relay_users` 계정으로 로그인 → C2 CLI:
+
 ```bash
 ssh alice@relay-host -p 2222
 ```
 
 ```
 C2> list
-  SERVER           STATUS    DESCRIPTION
-  server-001       online
-server-001   online
+  SERVER           STATUS     SESS  DESCRIPTION
+  server-001       online        0
 
 C2> login server-001
 Password for server-001: ********
@@ -302,21 +308,44 @@ alice@server-001:~$ exit
 C2> exit
 ```
 
+**(b) 일반 사용자(비관리자)** — **서버 id 를 SSH 사용자명으로, 서버 로그인
+비밀번호를 SSH 비밀번호로** 입력하면 메뉴 없이 그 서버 셸로 바로 들어갑니다:
+
+```bash
+ssh server-001@relay-host -p 2222
+# password: (서버 생성 시 정한 로그인 비밀번호)
+# -> 곧바로 server-001 의 셸
+```
+
+로그아웃(`exit`)하면 연결이 종료됩니다. 해당 서버만 접근할 수 있고 C2 명령은
+사용할 수 없습니다.
+
 ---
 
-## C2 CLI 명령
+## C2 CLI 명령 (운영자)
 
 | 명령 | 설명 |
 | --- | --- |
-| `list` (`servers`, `ls`) | 등록된 내부 서버와 online/offline 상태 |
+| `list` (`servers`, `ls`) | 서버 목록 + online/offline, 활성 세션 수 |
+| `sessions` (`who`) | 서버별 활성 세션 수 |
 | `add-server <id> [password]` | 서버 생성 + **원라이너 설치 링크** 출력 |
-| `login <server> [password]` | 인증 후 해당 서버의 실제 셸에 attach |
+| `login <server> [password]` (`connect`, `attach`) | 인증 후 셸에 attach |
+| `enable <server>` / `disable <server>` | 에이전트 접속 허용/차단(+연결 해제) |
+| `remove-server <server>` (`delete`) | 서버와 자격증명 삭제 |
+| `kick <server>` | 살아있는 에이전트 연결 강제 해제 |
+| `reset-token <server>` | 에이전트 토큰 재발급 + 설치 링크 재출력 |
+| `users` (`admins`) | 운영자 계정 목록 |
+| `add-user <name> [password]` | 운영자 계정 생성/비밀번호 변경 |
+| `remove-user <name>` | 운영자 계정 삭제 (마지막/본인 계정은 보호) |
+| `logs [n]` | 최근 릴레이 로그 n줄 |
+| `whoami` | 현재 계정 표시 |
 | `ping` | CLI 응답 확인 |
 | `help` (`?`) | 도움말 |
 | `exit` (`quit`, `logout`) | 접속 종료 |
 
 CLI는 방향키(히스토리/커서), Home/End, Delete, Tab 완성, Ctrl+A/E/U/K/W/C/L,
-Backspace를 지원합니다. `login`만 입력하면 비밀번호를 echo 없이 입력받습니다.
+Backspace를 지원합니다. `login`/`add-server`/`add-user`에서 비밀번호를 생략하면
+echo 없이 입력받습니다.
 
 ---
 
@@ -334,8 +363,12 @@ E2E 테스트에서 `stty size`로 이를 검증합니다 (`30 100` → resize �
 ## 보안 / 운영 주의
 
 - 이 도구는 **본인이 소유·관리 권한을 가진 서버**에만 사용하세요. 무단 접근은 불법입니다.
-- 운영자 SSH 인증: DB의 `relay_users`(PBKDF2 해시) 또는 `authorized_keys` 공개키.
-  `allow_anonymous: true`는 개발용이며 프로덕션에서는 **반드시 false**로 두세요.
+- SSH 인증은 두 종류입니다. ① 운영자: DB의 `relay_users`(PBKDF2 해시) 또는
+  `authorized_keys` 공개키 → C2 CLI. ② 일반 사용자: **서버 id + 서버 로그인
+  비밀번호** → 해당 서버 셸로 직행. 특정 서버만 공유하려면 그 서버를 만들고
+  로그인 비밀번호만 알려주면 됩니다.
+- `allow_anonymous: true`는 개발용이며 프로덕션에서는 **반드시 false**로 두세요.
+  (익명 로그인은 C2 CLI 운영자 권한을 부여합니다.)
 - 에이전트 토큰과 C2 로그인 비밀번호는 모두 해시로 저장되며, 평문은 생성 시 한 번만 노출됩니다.
 - TLS 사용 시 `wss://` + 역프록시(nginx) 구성과 토큰 보관에 유의하세요.
 - relay host key는 최초 기동 시 `host_key` 경로에 자동 생성됩니다(ed25519).
@@ -351,10 +384,14 @@ python -m pytest -q
 - `tests/test_protocol.py` — 프레이밍/바이너리 무손실/리사이즈 (+ vendored 복사본 동일성)
 - `tests/test_security.py` — 해시/토큰
 - `tests/test_lineeditor.py` — 편집·히스토리·제어문자·UTF-8
+- `tests/test_db.py` — 운영자 계정, 서버 enable/disable/remove, 토큰 재발급
+- `tests/test_logs.py` — 로그 링버퍼 캡처/테일
 - `tests/test_web.py` — 설치 웹 서버(토큰 검증, 원라이너 생성, 패키지 배포)
 - `tests/test_e2e.py` — **SSH 클라이언트 → 릴레이 → WebSocket → 에이전트 PTY → bash**
   전체 경로를 실제로 연결하여 확인:
   - 로그인 후 실제 셸 프롬프트
+  - C2 관리 명령(`users`/`disable`/`enable`/`remove-server`/`logs`) 및 `add-server`
+  - 비관리자 **서버 id + 비밀번호 직행 접속**
   - ANSI 컬러 이스케이프 통과
   - `stty size` 로 resize 전파 검증
   - Ctrl+C 로 `sleep` 중단

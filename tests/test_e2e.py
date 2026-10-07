@@ -111,6 +111,26 @@ async def _scenario() -> None:
                 proc.stdin.write(b"add-server brand-new secret1\n")
                 await out.until(b"http://127.0.0.1:1234/install/brand-new?token=")
 
+                # operator account management
+                proc.stdin.write(b"users\n")
+                await out.until(b"admin")
+
+                # disable / enable a server (no agent attached, so safe)
+                proc.stdin.write(b"disable brand-new\n")
+                await out.until(b"server brand-new disabled")
+                proc.stdin.write(b"list\n")
+                await out.until(b"disabled")
+                proc.stdin.write(b"enable brand-new\n")
+                await out.until(b"server brand-new enabled")
+
+                # removing a server deletes it from the registry
+                proc.stdin.write(b"remove-server brand-new\n")
+                await out.until(b"server brand-new removed")
+
+                # the C2 CLI can dump buffered log lines
+                proc.stdin.write(b"logs 5\n")
+                await out.until(b"\r\n")
+
                 proc.stdin.write(b"login server-001 opsecret\n")
                 await out.until(b"Connected to server-001")
                 await out.until(b"$")
@@ -152,6 +172,25 @@ async def _scenario() -> None:
                 proc.stdin.write(b"exit\n")
                 await out.until(b"disconnected from remote shell")
                 await out.until(b"C2>")
+                proc.stdin.write(b"exit\n")
+                await asyncio.sleep(0.2)
+
+            # non-admin direct access: server id + login password drops straight
+            # into that server's shell, no C2 menu at all
+            async with asyncssh.connect(
+                "127.0.0.1",
+                port=ssh_port,
+                username="server-001",
+                password="opsecret",
+                known_hosts=None,
+            ) as conn:
+                proc = await conn.create_process(
+                    term_type="xterm-256color", term_size=(100, 30), encoding=None
+                )
+                out = Expect(proc.stdout)
+                await out.until(b"$")
+                proc.stdin.write(b"echo DIRECT_OK_MARKER\n")
+                await out.until(b"DIRECT_OK_MARKER")
                 proc.stdin.write(b"exit\n")
                 await asyncio.sleep(0.2)
         finally:

@@ -1,5 +1,14 @@
 """SSH entry point and the C2 interactive shell.
 
+Two ways to use the relay over SSH:
+
+* **Operator / admin** - log in with a ``relay_users`` account.  The session
+  runs the C2 command menu (a small line editor) with which servers can be
+  created, connected to, disabled, removed, etc.
+* **Direct user** - log in with the *server id* as the SSH username and the
+  *server's login password* as the SSH password.  The session skips the menu
+  and drops straight into that server's shell.
+
 Flow::
 
     SSH client --(pty)--> RelaySession
@@ -25,7 +34,7 @@ import re
 
 import asyncssh
 
-from relay import protocol
+from relay import logs, protocol
 from relay.config import RelayConfig
 from relay.db import RegistryDB
 from relay.lineeditor import LineEditor
@@ -91,12 +100,16 @@ class RelaySession(asyncssh.SSHServerSession):
         registry: Registry,
         config: RelayConfig,
         conn: "asyncssh.SSHServerConnection | None" = None,
+        direct_server: str | None = None,
     ):
         self.username = username
         self.db = db
         self.registry = registry
         self.config = config
         self._conn = conn
+        # When set, the session bypasses the C2 menu and attaches straight to
+        # this server (non-admin access via server id + login password).
+        self.direct_server = direct_server
 
         self._chan: asyncssh.SSHServerChannel | None = None
         self._writer: ChannelWriter | None = None
@@ -188,9 +201,12 @@ class RelaySession(asyncssh.SSHServerSession):
     # -- main loop ---------------------------------------------------------
     async def _run(self) -> None:
         try:
-            self._emit_text(self.config.banner)
-            self._editor.set_prompt(self._prompt)
-            self._editor.render_prompt()
+            if self.direct_server is not None:
+                await self._attach_direct(self.direct_server)
+            else:
+                self._emit_text(self.config.banner)
+                self._editor.set_prompt(self._prompt)
+                self._editor.render_prompt()
             while not self._exit_requested:
                 data = await self._inbound.get()
                 if data is None:
@@ -247,10 +263,36 @@ class RelaySession(asyncssh.SSHServerSession):
             self._print_help()
         elif command in ("list", "servers", "ls"):
             self._print_servers()
+        elif command in ("sessions", "who"):
+            self._print_sessions()
         elif command in ("add-server", "addserver", "register"):
             await self._cmd_add_server(args)
-        elif command in ("login", "connect"):
+        elif command in ("login", "connect", "attach"):
             await self._cmd_login(args)
+        elif command in ("enable", "start"):
+            await self._cmd_set_enabled(args, True)
+        elif command in ("disable", "stop"):
+            await self._cmd_set_enabled(args, False)
+        elif command in ("remove-server", "del-server", "delete"):
+            await self._cmd_remove_server(args)
+        elif command in ("kick", "disconnect"):
+            await self._cmd_kick(args)
+        elif command in ("reset-token", "rotate-token"):
+            await self._cmd_reset_token(args)
+        elif command in ("users", "admins"):
+            self._print_users()
+        elif command in ("add-user", "add-admin"):
+            await self._cmd_add_user(args)
+        elif command in ("remove-user", "del-user", "remove-admin"):
+            await self._cmd_remove_user(args)
+        elif command in ("logs", "log", "tail"):
+            self._cmd_logs(args)
+        elif command in ("whoami", "me"):
+            self._emit_text(
+                f"{self.username} (\x1b[32moperator\x1b[0m)\r\n"
+                if self.direct_server is None
+                else f"{self.username} (server)\r\n"
+            )
         elif command in ("ping",):
             self._emit_text("pong\r\n")
         elif command in ("exit", "quit", "logout", "bye"):
@@ -262,12 +304,23 @@ class RelaySession(asyncssh.SSHServerSession):
     def _print_help(self) -> None:
         self._emit_text(
             "\r\n\x1b[1mAvailable commands\x1b[0m\r\n"
-            "  \x1b[36mlist\x1b[0m                    list known internal servers\r\n"
-            "  \x1b[36madd-server <id> [password]\x1b[0m create a server and print its one-line installer\r\n"
-            "  \x1b[36mlogin <server> [password]\x1b[0m log in and attach to a server's shell\r\n"
-            "  \x1b[36mping\x1b[0m                    check the C2 CLI is responsive\r\n"
-            "  \x1b[36mhelp\x1b[0m                    show this help\r\n"
-            "  \x1b[36mexit\x1b[0m                    disconnect\r\n"
+            "  \x1b[36mlist\x1b[0m                        list known internal servers\r\n"
+            "  \x1b[36msessions\x1b[0m                    show live session counts per server\r\n"
+            "  \x1b[36madd-server <id> [pw]\x1b[0m        create a server and print its one-line installer\r\n"
+            "  \x1b[36mlogin <server> [pw]\x1b[0m          attach to a server's shell\r\n"
+            "  \x1b[36menable\x1b[0m <server>             allow the server / agent to connect\r\n"
+            "  \x1b[36mdisable\x1b[0m <server>            block the server and drop its agent\r\n"
+            "  \x1b[36mremove-server\x1b[0m <server>      delete a server and its credentials\r\n"
+            "  \x1b[36mkick\x1b[0m <server>                drop the live agent connection\r\n"
+            "  \x1b[36mreset-token\x1b[0m <server>          rotate the agent token and reprint the installer\r\n"
+            "  \x1b[36musers\x1b[0m                       list operator accounts\r\n"
+            "  \x1b[36madd-user\x1b[0m <name> [pw]          create/update an operator account\r\n"
+            "  \x1b[36mremove-user\x1b[0m <name>            delete an operator account\r\n"
+            "  \x1b[36mlogs\x1b[0m [n]                    show the last n relay log lines\r\n"
+            "  \x1b[36mwhoami\x1b[0m                      show which account you are using\r\n"
+            "  \x1b[36mping\x1b[0m                        check the C2 CLI is responsive\r\n"
+            "  \x1b[36mhelp\x1b[0m                        show this help\r\n"
+            "  \x1b[36mexit\x1b[0m                        disconnect\r\n"
             "\r\n"
         )
 
@@ -276,16 +329,43 @@ class RelaySession(asyncssh.SSHServerSession):
         if not servers:
             self._emit_text("No servers registered.\r\n")
             return
-        self._emit_text("\r\n\x1b[1m  SERVER           STATUS    DESCRIPTION\x1b[0m\r\n")
+        counts = self.registry.session_counts()
+        self._emit_text(
+            "\r\n\x1b[1m  SERVER           STATUS     SESS  DESCRIPTION\x1b[0m\r\n"
+        )
         for server in servers:
             online = self.registry.is_online(server.name)
             if not server.enabled:
                 status = "\x1b[33mdisabled\x1b[0m"
             elif online:
-                status = "\x1b[32monline \x1b[0m"
+                status = "\x1b[32monline  \x1b[0m"
             else:
-                status = "\x1b[31moffline\x1b[0m"
-            self._emit_text(f"  {server.name:<16} {status}  {server.description}\r\n")
+                status = "\x1b[31moffline \x1b[0m"
+            sessions = counts.get(server.name, 0) if online else 0
+            self._emit_text(
+                f"  {server.name:<16} {status} {sessions:>4}  {server.description}\r\n"
+            )
+        self._emit_text("\r\n")
+
+    def _print_sessions(self) -> None:
+        counts = {n: c for n, c in self.registry.session_counts().items() if c}
+        if not counts:
+            self._emit_text("No active sessions.\r\n")
+            return
+        self._emit_text("\r\n\x1b[1m  SERVER           ACTIVE SESSIONS\x1b[0m\r\n")
+        for name in sorted(counts):
+            self._emit_text(f"  {name:<16} {counts[name]}\r\n")
+        self._emit_text("\r\n")
+
+    def _print_users(self) -> None:
+        users = self.db.list_relay_users()
+        if not users:
+            self._emit_text("No operator accounts.\r\n")
+            return
+        self._emit_text("\r\n\x1b[1m  OPERATOR\x1b[0m\r\n")
+        for user in users:
+            marker = " \x1b[32m(you)\x1b[0m" if user == self.username else ""
+            self._emit_text(f"  {user}{marker}\r\n")
         self._emit_text("\r\n")
 
     def _default_host(self) -> str:
@@ -373,10 +453,29 @@ class RelaySession(asyncssh.SSHServerSession):
             self._emit_text("\x1b[31mauthentication failed\x1b[0m\r\n")
             return
 
+        if await self._open_bridge(name):
+            self._emit_text(f"\r\n\x1b[32mConnected to {name}\x1b[0m\r\n\r\n")
+
+    async def _attach_direct(self, name: str) -> None:
+        """Non-admin path: go straight into the named server's shell."""
+        server = self.db.get_server(name)
+        if server is None:
+            self._emit_text("\x1b[31mserver no longer exists\x1b[0m\r\n")
+            self._exit_requested = True
+            return
+        if not server.enabled:
+            self._emit_text(f"\x1b[31mserver {name} is disabled\x1b[0m\r\n")
+            self._exit_requested = True
+            return
+        if not await self._open_bridge(name):
+            self._exit_requested = True
+
+    async def _open_bridge(self, name: str) -> bool:
+        """Open a PTY session on ``name`` and mark the session as bridged."""
         agent = self.registry.get(name)
         if agent is None or agent.closed:
             self._emit_text(f"server {name} is offline (agent not connected)\r\n")
-            return
+            return False
 
         loop = asyncio.get_event_loop()
         session_id = allocate_session_id()
@@ -398,33 +497,145 @@ class RelaySession(asyncssh.SSHServerSession):
         except ConnectionError:
             agent.remove_session(session_id)
             self._emit_text("agent connection lost\r\n")
-            return
+            return False
 
         try:
             result = await asyncio.wait_for(bridge.opened, timeout=self.config.open_timeout)
         except asyncio.TimeoutError:
             await bridge.close(b"")
             self._emit_text("timed out opening remote shell\r\n")
-            return
+            return False
 
         if not result or not result.get("ok"):
             error = (result or {}).get("error") or "unknown error"
             await bridge.close(b"")
             self._emit_text(f"\x1b[31mfailed to open shell:\x1b[0m {error}\r\n")
-            return
+            return False
 
         bridge.on_closed(self._on_bridge_closed)
         self._bridge = bridge
-        self._emit_text(f"\r\n\x1b[32mConnected to {name}\x1b[0m\r\n\r\n")
+        return True
 
     def _on_bridge_closed(self) -> None:
-        # The remote shell exited (or the agent dropped) - fall back to the CLI.
+        # The remote shell exited (or the agent dropped).
         self._bridge = None
         if self._chan is None:
             return
         self._emit_text("\r\n\x1b[33m[disconnected from remote shell]\x1b[0m\r\n")
+        if self.direct_server is not None:
+            # Direct sessions are single-use; end the connection.
+            self._exit_requested = True
+            self._inbound.put_nowait(None)
+            return
         self._editor.reset()
         self._editor.render_prompt()
+
+    async def _cmd_set_enabled(self, args: list[str], enabled: bool) -> None:
+        if not args:
+            self._emit_text("usage: enable|disable <server>\r\n")
+            return
+        name = args[0]
+        if not self.db.set_server_enabled(name, enabled):
+            self._emit_text(f"\x1b[31munknown server:\x1b[0m {name}\r\n")
+            return
+        verb = "enabled" if enabled else "disabled"
+        self._emit_text(f"server {name} {verb}\r\n")
+        if not enabled:
+            if await self.registry.disconnect(name, b"disabled by operator"):
+                self._emit_text(f"live agent for {name} disconnected\r\n")
+
+    async def _cmd_remove_server(self, args: list[str]) -> None:
+        if not args:
+            self._emit_text("usage: remove-server <server>\r\n")
+            return
+        name = args[0]
+        await self.registry.disconnect(name, b"server removed by operator")
+        if not self.db.remove_server(name):
+            self._emit_text(f"\x1b[31munknown server:\x1b[0m {name}\r\n")
+            return
+        self._emit_text(f"server {name} removed\r\n")
+
+    async def _cmd_kick(self, args: list[str]) -> None:
+        if not args:
+            self._emit_text("usage: kick <server>\r\n")
+            return
+        name = args[0]
+        if not await self.registry.disconnect(name, b"kicked by operator"):
+            self._emit_text(f"server {name} is not connected\r\n")
+            return
+        self._emit_text(f"agent for {name} disconnected (it will reconnect)\r\n")
+
+    async def _cmd_reset_token(self, args: list[str]) -> None:
+        if not args:
+            self._emit_text("usage: reset-token <server>\r\n")
+            return
+        name = args[0]
+        token = self.db.rotate_server_token(name)
+        if token is None:
+            self._emit_text(f"\x1b[31munknown server:\x1b[0m {name}\r\n")
+            return
+        await self.registry.disconnect(name, b"agent token rotated")
+        host = self._default_host()
+        self._emit_text(f"\r\n\x1b[32mNew agent token for '{name}' (shown once):\x1b[0m\r\n\r\n")
+        installer = install_command(self.config, name, token, host) if host else None
+        if installer:
+            self._emit_text(
+                "Run this one-liner on the server to (re)install the agent:\r\n\r\n"
+                f"  \x1b[36m{installer}\x1b[0m\r\n\r\n"
+            )
+        else:
+            self._emit_text(f"  {token}\r\n\r\n")
+
+    async def _cmd_add_user(self, args: list[str]) -> None:
+        if not args:
+            self._emit_text("usage: add-user <name> [password]\r\n")
+            return
+        name = args[0]
+        password = args[1] if len(args) > 1 else None
+        if password is None:
+            password = await self._read_password(f"Password for operator {name}: ")
+            if password is None:
+                self._emit_text("cancelled\r\n")
+                return
+        if not password:
+            self._emit_text("password must not be empty\r\n")
+            return
+        self.db.add_relay_user(name, password)
+        self._emit_text(f"\x1b[32moperator '{name}' saved.\x1b[0m\r\n")
+
+    async def _cmd_remove_user(self, args: list[str]) -> None:
+        if not args:
+            self._emit_text("usage: remove-user <name>\r\n")
+            return
+        name = args[0]
+        if name == self.username:
+            self._emit_text("\x1b[33mcannot remove the account you are logged in with\x1b[0m\r\n")
+            return
+        if not self.db.relay_user_exists(name):
+            self._emit_text(f"\x1b[31munknown operator:\x1b[0m {name}\r\n")
+            return
+        if self.db.count_relay_users() <= 1:
+            self._emit_text("\x1b[33mrefusing to remove the last operator account\x1b[0m\r\n")
+            return
+        self.db.remove_relay_user(name)
+        self._emit_text(f"operator '{name}' removed\r\n")
+
+    def _cmd_logs(self, args: list[str]) -> None:
+        count = 100
+        if args:
+            try:
+                count = max(1, min(int(args[0]), 500))
+            except ValueError:
+                self._emit_text("usage: logs [n]\r\n")
+                return
+        lines = logs.tail(count)
+        if not lines:
+            self._emit_text("No log lines buffered yet.\r\n")
+            return
+        self._emit_text("\r\n")
+        for line in lines:
+            self._emit_text(line + "\r\n")
+        self._emit_text("\r\n")
 
     async def _read_password(self, prompt: str) -> str | None:
         self._emit_text(prompt)
@@ -456,18 +667,24 @@ class RelaySession(asyncssh.SSHServerSession):
 
     def _complete(self, line: str, cursor: int) -> list[str]:
         prefix = line[:cursor]
+        commands = [
+            "help", "list", "sessions", "add-server", "login", "enable", "disable",
+            "remove-server", "kick", "reset-token", "users", "add-user",
+            "remove-user", "logs", "whoami", "ping", "exit",
+        ]
         # completing the command itself
         if " " not in prefix:
-            commands = ["help", "list", "add-server", "login", "ping", "exit"]
             return [c for c in commands if c.startswith(prefix)]
         parts = prefix.split()
-        if parts and parts[0] in ("login", "connect"):
-            word = "" if prefix.endswith(" ") else parts[-1]
+        command = parts[0]
+        word = "" if prefix.endswith(" ") else parts[-1]
+        if command in ("login", "connect", "attach", "enable", "disable", "remove-server",
+                       "del-server", "delete", "kick", "reset-token", "rotate-token"):
             names = [s.name for s in self.db.list_servers()]
-            matches = [n for n in names if n.startswith(word)]
-            if prefix.endswith(" "):
-                return matches
-            return [n for n in matches]
+            return [n for n in names if n.startswith(word)]
+        if command in ("remove-user", "del-user", "remove-admin"):
+            names = self.db.list_relay_users()
+            return [n for n in names if n.startswith(word)]
         return []
 
 
@@ -478,6 +695,7 @@ class RelaySSHServer(asyncssh.SSHServer):
         self.config = config
         self._conn: asyncssh.SSHServerConnection | None = None
         self._username = ""
+        self._direct_server: str | None = None
         self._authorized_keys = self._load_authorized_keys()
 
     def _load_authorized_keys(self) -> set[bytes]:
@@ -502,16 +720,25 @@ class RelaySSHServer(asyncssh.SSHServer):
 
     def begin_auth(self, username: str) -> bool:
         self._username = username
+        self._direct_server = None
         return True
 
     def password_auth_supported(self) -> bool:
         return True
 
     def validate_password(self, username: str, password: str) -> bool:
+        # 1) operator/admin account -> the C2 CLI
         if self.db.verify_relay_user(username, password):
+            self._direct_server = None
+            return True
+        # 2) server credentials -> straight into that server's shell
+        if self.db.verify_server_login(username, password):
+            self._direct_server = username
+            log.info("direct SSH login for server %r", username)
             return True
         if self.config.allow_anonymous:
             log.warning("allowing anonymous SSH login for %r (allow_anonymous=true)", username)
+            self._direct_server = None
             return True
         return False
 
@@ -519,10 +746,20 @@ class RelaySSHServer(asyncssh.SSHServer):
         return bool(self._authorized_keys)
 
     def validate_public_key(self, username: str, key) -> bool:
-        return key.export_public_key() in self._authorized_keys
+        if key.export_public_key() in self._authorized_keys:
+            self._direct_server = None
+            return True
+        return False
 
     def session_requested(self) -> RelaySession:
-        return RelaySession(self._username, self.db, self.registry, self.config, self._conn)
+        return RelaySession(
+            self._username,
+            self.db,
+            self.registry,
+            self.config,
+            self._conn,
+            direct_server=self._direct_server,
+        )
 
 
 async def start_ssh_server(db: RegistryDB, registry: Registry, config: RelayConfig):

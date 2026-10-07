@@ -21,6 +21,8 @@ class AgentSink(Protocol):
 
     async def send_raw(self, data: bytes) -> None: ...
 
+    async def close(self, code: int = 1000, reason: str = "") -> None: ...
+
 
 _session_ids = itertools.count(1)
 
@@ -184,6 +186,28 @@ class Registry:
 
     def online_servers(self) -> list[str]:
         return [name for name, agent in self._agents.items() if not agent.closed]
+
+    def session_counts(self) -> dict[str, int]:
+        return {
+            name: len(agent.sessions)
+            for name, agent in self._agents.items()
+            if not agent.closed
+        }
+
+    async def disconnect(self, server_name: str, reason: bytes = b"disconnected by operator") -> bool:
+        """Drop a live agent connection.  Returns True if one was connected."""
+        agent = self._agents.get(server_name)
+        if agent is None or agent.closed:
+            return False
+        await agent.shutdown(reason)
+        closer = getattr(agent.sink, "close", None)
+        if closer is not None:
+            try:
+                await closer(1000, "disconnected by operator")
+            except Exception:  # pragma: no cover - transport may already be gone
+                pass
+        await self.remove(agent)
+        return True
 
     async def shutdown(self) -> None:
         for agent in list(self._agents.values()):

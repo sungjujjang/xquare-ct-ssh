@@ -9,6 +9,7 @@ import signal
 
 from relay.config import RelayConfig
 from relay.db import RegistryDB
+from relay.logs import install as install_log_buffer
 from relay.registry import Registry
 from relay.ssh_server import start_ssh_server
 from relay.web import start_web_server
@@ -92,6 +93,7 @@ def main(argv: list[str] | None = None) -> int:
         level=getattr(logging, config.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
+    install_log_buffer(logging.DEBUG if config.log_level.lower() == "debug" else logging.INFO)
     try:
         asyncio.run(amain(config))
     except KeyboardInterrupt:  # pragma: no cover

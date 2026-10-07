@@ -34,6 +34,9 @@ class WebSocketSink:
     async def send_raw(self, data: bytes) -> None:
         await self._ws.send(data)
 
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        await self._ws.close(code=code, reason=reason)
+
 
 async def _handle_agent(db: RegistryDB, registry: Registry, config: RelayConfig, ws) -> None:
     peer = getattr(ws, "remote_address", None)

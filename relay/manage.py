@@ -9,6 +9,9 @@ Examples::
     python -m relay.manage list
     python -m relay.manage disable server-001
     python -m relay.manage remove-server server-001
+    python -m relay.manage users
+    python -m relay.manage remove-user alice
+    python -m relay.manage reset-token server-001
 """
 
 from __future__ import annotations
@@ -153,6 +156,50 @@ def cmd_remove_server(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_list_users(args: argparse.Namespace) -> int:
+    db = _open_db(args)
+    users = db.list_relay_users()
+    if not users:
+        print("no relay users registered")
+        return 0
+    for user in users:
+        print(user)
+    return 0
+
+
+def cmd_remove_user(args: argparse.Namespace) -> int:
+    db = _open_db(args)
+    if not db.remove_relay_user(args.username):
+        print(f"relay user '{args.username}' not found", file=sys.stderr)
+        return 1
+    print(f"relay user '{args.username}' removed")
+    return 0
+
+
+def cmd_reset_token(args: argparse.Namespace) -> int:
+    config = RelayConfig.load(args.config)
+    if args.advertise_host:
+        config.advertise_host = args.advertise_host
+    if args.web_port:
+        config.web_port = args.web_port
+    if args.ws_port:
+        config.ws_port = args.ws_port
+    db = RegistryDB(config.db_path)
+    db.init_schema()
+    token = db.rotate_server_token(args.name, token=args.token)
+    if token is None:
+        print(f"server '{args.name}' not found", file=sys.stderr)
+        return 1
+    print(f"new agent token for '{args.name}' (shown once):")
+    print(f"  {token}")
+    installer = install_command(config, args.name, token, args.advertise_host)
+    if installer:
+        print()
+        print("Reinstall the agent on the server with:")
+        print(f"  {installer}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="xquare Control Tower registry manager")
     parser.add_argument("-c", "--config", help="path to a YAML config file")
@@ -189,6 +236,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_remove = sub.add_parser("remove-server", help="delete a server")
     p_remove.add_argument("name")
     p_remove.set_defaults(func=cmd_remove_server)
+
+    sub.add_parser("users", help="list relay SSH users").set_defaults(func=cmd_list_users)
+
+    p_rmuser = sub.add_parser("remove-user", help="delete a relay SSH user")
+    p_rmuser.add_argument("username")
+    p_rmuser.set_defaults(func=cmd_remove_user)
+
+    p_token = sub.add_parser("reset-token", help="rotate a server's agent token")
+    p_token.add_argument("name")
+    p_token.add_argument("--token", help="explicit new token (default: random)")
+    p_token.add_argument("--advertise-host", help="public host for the installer URL")
+    p_token.add_argument("--web-port", type=int)
+    p_token.add_argument("--ws-port", type=int)
+    p_token.set_defaults(func=cmd_reset_token)
 
     return parser
 

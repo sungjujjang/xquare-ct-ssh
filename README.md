@@ -110,6 +110,68 @@ pip install pywinpty
 
 ---
 
+## Ubuntu 설치 스크립트 (systemd)
+
+Ubuntu 서버에서는 `scripts/` 아래의 두 스크립트로 venv 생성 · 설정 파일 작성 ·
+DB 초기화 · systemd 서비스 등록까지 한 번에 처리할 수 있습니다. 재실행해도
+안전합니다(멱등).
+
+### A. 릴레이 서버 (relay) — 공인/중계 서버에서 실행
+
+```bash
+git clone <repo> && cd xquare-ct-ssh
+sudo ./scripts/setup-relay.sh \
+    --ssh-port 2222 \
+    --ws-port 8765 \
+    --admin-user alice \
+    --admin-password 'strong-password'
+```
+
+- `python3`, `python3-venv`, `python3-pip` 자동 설치
+- `/opt/xquare-ct-ssh-relay` 에 venv + 애플리케이션 설치
+- `/etc/xquare-ct-ssh/relay.yaml` 설정 생성
+- `/var/lib/xquare-ct-ssh/relay.db` 레지스트리 초기화 + SSH 사용자 생성
+- `xq-relay.service` 등록/기동 (`systemctl status xq-relay`)
+
+주요 옵션: `--ssh-port`, `--ws-port`, `--admin-user`, `--admin-password`,
+`--service-user`, `--install-dir`, `--config-dir`, `--data-dir`,
+`--no-service`(systemd 생략), `--skip-deps`(apt 생략), `--allow-nonroot`(sudo 없이 홈 디렉터리 설치).
+
+서버 등록(에이전트 토큰 1회 출력):
+
+```bash
+sudo -u root /opt/xquare-ct-ssh-relay/venv/bin/python -m tools.manage \
+    -c /etc/xquare-ct-ssh/relay.yaml add-server server-001 --password '<login-pass>'
+```
+
+### B. 내부 에이전트 (agent) — 셸을 노출할 내부 서버에서 실행
+
+```bash
+git clone <repo> && cd xquare-ct-ssh
+sudo ./scripts/setup-agent.sh \
+    --relay ws://<relay-host>:8765/agent \
+    --id server-001 \
+    --token xq_xxxxxxxxxxxxxxxxxxxx \
+    --shell /bin/bash \
+    --service-user root
+```
+
+- `python3`/venv/pip 자동 설치, `/opt/xquare-ct-ssh-agent` 에 설치
+- `/etc/xquare-ct-ssh/agent.env`(600) 에 자격증명 저장, `EnvironmentFile`로 로드
+- `xq-agent.service` 등록/기동 (`Restart=always`, `journalctl -u xq-agent -f`)
+
+인바운드 포트를 열 필요가 없습니다(에이전트가 relay로 접속). `--service-user`로
+지정한 계정의 셸이 노출되므로 목적에 맞게 지정하세요(기본 root).
+
+주요 옵션: `--relay`, `--id`, `--token`, `--shell`, `--service-user`,
+`--install-dir`, `--config-dir`, `--no-service`, `--skip-deps`, `--allow-nonroot`.
+
+> `--allow-nonroot`는 sudo 없이 사용자 홈 디렉터리에 설치하는 모드입니다
+> (apt/systemd 자동 단계는 건너뜀). systemd 없이 실행하려면
+> `--no-service` 후 `venv/bin/python -m relay` / `-m agent` 로 직접 기동하세요.
+
+---
+
 ## 빠른 시작
 
 ### 1) 레지스트리 초기화

@@ -1,0 +1,4 @@
+# Relay server dependencies (Ubuntu: python3 python3-venv python3-pip)
+asyncssh>=2.14
+websockets>=13
+PyYAML>=6.0

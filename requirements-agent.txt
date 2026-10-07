@@ -1,0 +1,4 @@
+# Internal agent dependencies (Ubuntu: python3 python3-venv python3-pip)
+# On Windows add: pywinpty
+websockets>=13
+PyYAML>=6.0

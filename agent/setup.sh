@@ -7,26 +7,29 @@
 # Safe to re-run (idempotent); existing credentials are preserved unless
 # overridden with --relay/--id/--token.
 #
-#   sudo ./scripts/setup-agent.sh \
+#   sudo ./agent/setup.sh \
 #       --relay ws://relay.example.com:8765/agent \
 #       --id server-001 --token xq_xxxxxxxx
+#
+# It also accepts the same values from the XQ_* environment variables, which is
+# how the relay's one-line installer (curl ... | sudo bash) drives it.
 #
 set -euo pipefail
 
 # --------------------------------------------------------------------------- #
-# defaults
+# defaults (environment gives the one-line installer a head start)
 # --------------------------------------------------------------------------- #
-RELAY_URL=""
-SERVER_ID=""
-TOKEN=""
-SHELL_PATH=""
-INSTALL_DIR="/opt/xquare-ct-ssh-agent"
-CONFIG_DIR="/etc/xquare-ct-ssh"
+RELAY_URL="${XQ_RELAY_URL:-}"
+SERVER_ID="${XQ_SERVER_ID:-}"
+TOKEN="${XQ_AGENT_TOKEN:-}"
+SHELL_PATH="${XQ_SHELL:-}"
+INSTALL_DIR="${XQ_INSTALL_DIR:-/opt/xquare-ct-ssh-agent}"
+CONFIG_DIR="${XQ_CONFIG_DIR:-/etc/xquare-ct-ssh}"
 SERVICE_NAME="xq-agent"
 SERVICE_USER="root"
 INSTALL_SERVICE=1
 SKIP_DEPS=0
-ALLOW_NONROOT=0
+ALLOW_NONROOT="${XQ_ALLOW_NONROOT:-0}"
 
 # --------------------------------------------------------------------------- #
 # pretty logging
@@ -39,7 +42,10 @@ die()  { printf '%s[fail]%s %s\n'  "$C_ERR"  "$C_RESET" "$*" >&2; exit 1; }
 
 usage() {
   cat <<'EOF'
-Usage: sudo ./scripts/setup-agent.sh --relay URL --id ID --token TOKEN [options]
+Usage: sudo ./agent/setup.sh --relay URL --id ID --token TOKEN [options]
+
+Values may also be supplied via XQ_RELAY_URL, XQ_SERVER_ID, XQ_AGENT_TOKEN,
+XQ_SHELL and XQ_INSTALL_DIR (used by the relay's one-line installer).
 
 Options:
   --relay URL            relay WebSocket URL, e.g. ws://relay:8765/agent
@@ -91,6 +97,10 @@ require_root() {
       warn "running as non-root (--allow-nonroot): system packages and services are disabled"
       INSTALL_SERVICE=0
       SKIP_DEPS=1
+      if [ "$CONFIG_DIR" = "/etc/xquare-ct-ssh" ]; then
+        CONFIG_DIR="$INSTALL_DIR/etc"
+      fi
+      ENV_FILE="$CONFIG_DIR/agent.env"
       return
     fi
     die "must run as root (try: sudo $0 $*) or pass --allow-nonroot for a user-local install"
@@ -128,13 +138,11 @@ repo_root() {
 
 copy_source() {
   local repo="$1"
-  [ -d "$repo/agent" ] || die "cannot find 'agent/' next to $repo — run this script from the repository"
+  [ -d "$repo/agent" ] || die "cannot find 'agent/' next to $repo - run this script from the repository (agent/setup.sh)"
   log "installing application files into $INSTALL_DIR"
   mkdir -p "$INSTALL_DIR"
-  rm -rf "$INSTALL_DIR/agent" "$INSTALL_DIR/common"
+  rm -rf "$INSTALL_DIR/agent"
   cp -a "$repo/agent" "$INSTALL_DIR/"
-  cp -a "$repo/common" "$INSTALL_DIR/"
-  cp -a "$repo/requirements-agent.txt" "$INSTALL_DIR/"
   [ -f "$repo/README.md" ] && cp -a "$repo/README.md" "$INSTALL_DIR/" || true
 }
 
@@ -144,7 +152,7 @@ create_venv() {
     python3 -m venv "$VENV"
   fi
   "$VENV/bin/pip" install --quiet --upgrade pip
-  "$VENV/bin/pip" install --quiet -r "$INSTALL_DIR/requirements-agent.txt"
+  "$VENV/bin/pip" install --quiet -r "$INSTALL_DIR/agent/requirements.txt"
   ok "python dependencies installed"
 }
 

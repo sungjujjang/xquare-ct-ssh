@@ -11,7 +11,7 @@ import itertools
 import logging
 from typing import Any, Protocol
 
-from common import protocol
+from relay import protocol
 
 log = logging.getLogger("relay.registry")
 

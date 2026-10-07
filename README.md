@@ -44,24 +44,36 @@ Internal Agent  ── PTY (pty.fork / ConPTY) ──► 실제 Shell
 
 ## 저장소 구조
 
+`relay/` 와 `agent/` 는 **각각 독립적으로 배포 가능한 폴더**입니다. 두 폴더는
+서로를 import 하지 않으며, 공통 프로토콜은 각 폴더에 vendoring 되어 있습니다
+(`relay/protocol.py` ≡ `agent/protocol.py`, 동일성은 테스트로 강제). 따라서
+에이전트만 따로 복사/패키징해서 내부 서버에 배포할 수 있습니다.
+
 ```
-common/protocol.py      WebSocket 바이너리 프레이밍 (type + session_id + payload)
-relay/
-  __main__.py           엔트리포인트 (SSH + WebSocket 동시 기동)
-  ssh_server.py         SSH 서버, C2 세션, CLI→브리지 전환
-  lineeditor.py         C2 CLI 라인 에디터 (히스토리/완성/제어문자)
-  ws_server.py          에이전트 WebSocket 수신 + 인증
-  registry.py           에이전트 연결/세션 브리지 레지스트리
-  db.py                 SQLite (서버/운영자 자격증명, 해시 저장)
-  security.py           PBKDF2 해시 / 토큰
-  config.py             YAML + 환경변수 설정
-agent/
-  __main__.py           엔트리포인트
-  agent.py              WebSocket 클라이언트, 세션 멀티플렉싱, 재접속
-  pty_backend.py        Unix PTY / Windows ConPTY 백엔드
-tools/manage.py         DB 초기화, 사용자/서버 등록 CLI
-tests/                  프로토콜/보안/에디터 단위 테스트 + E2E 테스트
+relay/                      # 중계(릴레이) 서버 - 독립 배포 가능
+  __main__.py               엔트리포인트 (SSH + WebSocket + 설치 웹 동시 기동)
+  ssh_server.py             SSH 서버, C2 세션/CLI, add-server, 브리지 전환
+  lineeditor.py             C2 CLI 라인 에디터 (히스토리/완성/제어문자)
+  ws_server.py              에이전트 WebSocket 수신 + 인증
+  web.py                    설치 웹 서버 (1234): 원라이너 설치 스크립트 제공
+  registry.py               에이전트 연결/세션 브리지 레지스트리
+  db.py                     SQLite (서버/운영자 자격증명, 해시 저장)
+  security.py               PBKDF2 해시 / 토큰
+  config.py                 YAML + 환경변수 설정
+  manage.py                 DB 초기화, 사용자/서버 등록 CLI (python -m relay.manage)
+  protocol.py               공통 프레이밍 (vendored 복사본)
+  requirements.txt          릴레이 의존성
+  setup.sh                  Ubuntu 설치 스크립트 (systemd)
+agent/                      # 내부 에이전트 - 독립 배포 가능
+  __main__.py               엔트리포인트
+  agent.py                  WebSocket 클라이언트, 세션 멀티플렉싱, 재접속
+  pty_backend.py            Unix PTY / Windows ConPTY 백엔드
+  protocol.py               공통 프레이밍 (vendored 복사본)
+  requirements.txt          에이전트 의존성
+  setup.sh                  Ubuntu 설치 스크립트 (systemd, 원라이너가 호출)
+tests/                      프로토콜/보안/에디터/웹 단위 테스트 + E2E 테스트
 ```
+
 
 ---
 
@@ -110,65 +122,115 @@ pip install pywinpty
 
 ---
 
-## Ubuntu 설치 스크립트 (systemd)
-
-Ubuntu 서버에서는 `scripts/` 아래의 두 스크립트로 venv 생성 · 설정 파일 작성 ·
-DB 초기화 · systemd 서비스 등록까지 한 번에 처리할 수 있습니다. 재실행해도
-안전합니다(멱등).
+## Ubuntu 설치 (systemd)
 
 ### A. 릴레이 서버 (relay) — 공인/중계 서버에서 실행
 
 ```bash
 git clone <repo> && cd xquare-ct-ssh
-sudo ./scripts/setup-relay.sh \
+sudo ./relay/setup.sh \
     --ssh-port 2222 \
     --ws-port 8765 \
+    --web-port 1234 \
+    --advertise-host <relay-public-ip-or-domain> \
     --admin-user alice \
     --admin-password 'strong-password'
 ```
 
 - `python3`, `python3-venv`, `python3-pip` 자동 설치
 - `/opt/xquare-ct-ssh-relay` 에 venv + 애플리케이션 설치
-- `/etc/xquare-ct-ssh/relay.yaml` 설정 생성
+- `/etc/xquare-ct-ssh/relay.yaml` 설정 생성 (`advertise_host` / `web` 포함)
 - `/var/lib/xquare-ct-ssh/relay.db` 레지스트리 초기화 + SSH 사용자 생성
-- `xq-relay.service` 등록/기동 (`systemctl status xq-relay`)
+- `agent/` 를 `agent-dist.tar.gz` 로 패키징 (설치 웹이 배포)
+- `xq-relay.service` 등록/기동 (`Restart=on-failure`)
 
-주요 옵션: `--ssh-port`, `--ws-port`, `--admin-user`, `--admin-password`,
-`--service-user`, `--install-dir`, `--config-dir`, `--data-dir`,
-`--no-service`(systemd 생략), `--skip-deps`(apt 생략), `--allow-nonroot`(sudo 없이 홈 디렉터리 설치).
+주요 옵션: `--ssh-port`, `--ws-port`, `--web-host`, `--web-port`,
+`--advertise-host`, `--admin-user`, `--admin-password`, `--service-user`,
+`--install-dir`, `--config-dir`, `--data-dir`, `--no-service`, `--skip-deps`,
+`--allow-nonroot`.
 
-서버 등록(에이전트 토큰 1회 출력):
+### B. 서버 추가는 C2 CLI 에서 한 줄로 (에이전트 수동 설치 불필요)
 
-```bash
-sudo -u root /opt/xquare-ct-ssh-relay/venv/bin/python -m tools.manage \
-    -c /etc/xquare-ct-ssh/relay.yaml add-server server-001 --password '<login-pass>'
-```
-
-### B. 내부 에이전트 (agent) — 셸을 노출할 내부 서버에서 실행
+SSH 로 접속한 뒤 C2 CLI 에서 서버 id 와 로그인 비밀번호만 입력하면, 설치 웹
+서버(기본 1234)가 **원라이너 curl 링크**를 만들어 줍니다.
 
 ```bash
-git clone <repo> && cd xquare-ct-ssh
-sudo ./scripts/setup-agent.sh \
-    --relay ws://<relay-host>:8765/agent \
-    --id server-001 \
-    --token xq_xxxxxxxxxxxxxxxxxxxx \
-    --shell /bin/bash \
-    --service-user root
+ssh alice@<relay-host> -p 2222
 ```
 
-- `python3`/venv/pip 자동 설치, `/opt/xquare-ct-ssh-agent` 에 설치
-- `/etc/xquare-ct-ssh/agent.env`(600) 에 자격증명 저장, `EnvironmentFile`로 로드
-- `xq-agent.service` 등록/기동 (`Restart=always`, `journalctl -u xq-agent -f`)
+```
+C2> add-server server-001
+Login password for new server server-001: ********
+Server 'server-001' created.
 
-인바운드 포트를 열 필요가 없습니다(에이전트가 relay로 접속). `--service-user`로
-지정한 계정의 셸이 노출되므로 목적에 맞게 지정하세요(기본 root).
+Run this one-liner on the internal server (as root):
+  curl -fsSL 'http://<relay-host>:1234/install/server-001?token=xq_...' | sudo bash
+```
 
-주요 옵션: `--relay`, `--id`, `--token`, `--shell`, `--service-user`,
-`--install-dir`, `--config-dir`, `--no-service`, `--skip-deps`, `--allow-nonroot`.
+내부 서버에서 그 한 줄만 실행하면:
 
-> `--allow-nonroot`는 sudo 없이 사용자 홈 디렉터리에 설치하는 모드입니다
-> (apt/systemd 자동 단계는 건너뜀). systemd 없이 실행하려면
-> `--no-service` 후 `venv/bin/python -m relay` / `-m agent` 로 직접 기동하세요.
+- `agent-dist.tar.gz` 다운로드 → `/opt/xquare-ct-ssh-agent` 설치
+- `/etc/xquare-ct-ssh/agent.env`(600) 자격증명 기록
+- `xq-agent.service` 등록 + **즉시 시작 + 부팅 시 자동 시작** (`Restart=always`)
+- 에이전트가 relay 로 접속하므로 내부 서버 인바운드 포트 개방 **불필요**
+
+오프라인/수동 설치가 필요하면 `agent/setup.sh` 를 직접 실행하거나
+`python -m relay.manage add-server ...` 로 토큰+링크를 출력할 수 있습니다.
+
+---
+
+## 중계 서버 주소(IP) 설정
+
+`add-server` 가 만들어 주는 원라이너와 에이전트의 `relay_url` 에는 **에이전트가
+접속할 중계 서버 주소**가 들어갑니다. 우선순위는 다음과 같습니다.
+
+1. 설정 파일 `relay.advertise_host` (권장: 공인 IP 또는 도메인)
+2. `relay/setup.sh --advertise-host <host>` 또는 `relay/setup.sh` 실행 시 자동
+3. 비어 있으면 **운영자가 접속한 주소**(SSH 연결의 서버측 소켓 주소)를 자동 사용
+4. 환경변수 `XQ_RELAY_ADVERTISE_HOST` 로도 덮어쓸 수 있음
+
+즉, 별도 설정이 없어도 `ssh <public-ip> ...` 로 접속했다면 링크가 그 IP 로
+생성됩니다. 다만 NAT/프록시 뒤라면 `advertise_host` 를 명시하는 편이 안전합니다.
+
+```yaml
+# /etc/xquare-ct-ssh/relay.yaml
+relay:
+  advertise_host: relay.example.com   # 링크/에이전트에 쓸 주소
+  ws_port: 8765
+  ws_path: /agent
+web:
+  web_port: 1234
+```
+
+- 포트가 다르면 ws 포트(`--ws-port`)와 web 포트(`--web-port`)도 함께 맞춰 주세요.
+- CLI 로 즉석에서 바꿀 수도 있습니다: `python -m relay --advertise-host 1.2.3.4 --web-port 1234`
+- TLS(`wss://`, `https://`)는 nginx/caddy 역프록시 뒤에 두고 `advertise_host` 에
+  도메인을 넣는 구성을 권장합니다.
+
+---
+
+## 중계 서버 중지 / 재시작
+
+systemd 로 설치했다면:
+
+```bash
+sudo systemctl stop xq-relay          # 중지
+sudo systemctl restart xq-relay       # 재시작
+sudo systemctl status xq-relay        # 상태
+sudo journalctl -u xq-relay -f        # 로그
+```
+
+systemd 없이 직접 띄운 경우(예: `python -m relay ... &`): 프로세스를 종료합니다.
+
+```bash
+kill "$(cat /tmp/xq-test2/relay.pid)"   # PID 파일을 저장해 둔 경우
+pkill -f "python -m relay"              # 이름으로 종료
+```
+
+정상 종료(SIGTERM/SIGINT) 시 SSH/WebSocket/설치 웹 리스너를 모두 닫고 종료합니다.
+에이전트도 동일하게 `systemctl stop xq-agent` (`RestartSec=5`, `Restart=always`
+이므로 중지하려면 `stop` + `disable`).
+
 
 ---
 
@@ -178,12 +240,14 @@ sudo ./scripts/setup-agent.sh \
 
 ```bash
 cp config.example.yaml config.yaml
-python -m tools.manage -c config.yaml init
-python -m tools.manage -c config.yaml add-user alice            # SSH 로그인 계정
-python -m tools.manage -c config.yaml add-server server-001     # 내부 서버 등록
+python -m relay.manage -c config.yaml init
+python -m relay.manage -c config.yaml add-user alice          # SSH 로그인 계정
+python -m relay.manage -c config.yaml add-server server-001   # (선택) 서버 등록
 ```
 
-`add-server`는 **에이전트 토큰을 한 번만** 출력합니다. 내부 서버에 안전하게 보관하세요.
+`add-server`는 **에이전트 토큰을 한 번만** 출력합니다. 내부 서버를 추가하는
+가장 쉬운 방법은 릴레이에 SSH 로 접속한 뒤 C2 CLI 에서 `add-server` 를 쓰는
+것입니다(아래 참고). `relay.manage` 는 오프라인/스크립트용입니다.
 
 ### 2) 릴레이 서버 기동
 
@@ -191,6 +255,7 @@ python -m tools.manage -c config.yaml add-server server-001     # 내부 서버 
 python -m relay -c config.yaml
 # SSH   : 0.0.0.0:2222
 # WS    : ws://0.0.0.0:8765/agent
+# WEB   : http://0.0.0.0:1234   (설치 웹 서버)
 ```
 
 ### 3) 내부 서버에 에이전트 배치/기동
@@ -244,6 +309,7 @@ C2> exit
 | 명령 | 설명 |
 | --- | --- |
 | `list` (`servers`, `ls`) | 등록된 내부 서버와 online/offline 상태 |
+| `add-server <id> [password]` | 서버 생성 + **원라이너 설치 링크** 출력 |
 | `login <server> [password]` | 인증 후 해당 서버의 실제 셸에 attach |
 | `ping` | CLI 응답 확인 |
 | `help` (`?`) | 도움말 |
@@ -282,9 +348,10 @@ E2E 테스트에서 `stty size`로 이를 검증합니다 (`30 100` → resize �
 python -m pytest -q
 ```
 
-- `tests/test_protocol.py` — 프레이밍/바이너리 무손실/리사이즈
+- `tests/test_protocol.py` — 프레이밍/바이너리 무손실/리사이즈 (+ vendored 복사본 동일성)
 - `tests/test_security.py` — 해시/토큰
 - `tests/test_lineeditor.py` — 편집·히스토리·제어문자·UTF-8
+- `tests/test_web.py` — 설치 웹 서버(토큰 검증, 원라이너 생성, 패키지 배포)
 - `tests/test_e2e.py` — **SSH 클라이언트 → 릴레이 → WebSocket → 에이전트 PTY → bash**
   전체 경로를 실제로 연결하여 확인:
   - 로그인 후 실제 셸 프롬프트

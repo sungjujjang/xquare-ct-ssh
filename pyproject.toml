@@ -20,10 +20,10 @@ windows = ["pywinpty>=2.0"]
 [project.scripts]
 xq-relay = "relay.__main__:main"
 xq-agent = "agent.__main__:main"
-xq-manage = "tools.manage:main"
+xq-manage = "relay.manage:main"
 
 [tool.setuptools]
-packages = ["common", "relay", "agent", "tools"]
+packages = ["relay", "agent"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

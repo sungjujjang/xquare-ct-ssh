@@ -2,13 +2,13 @@
 
 Examples::
 
-    python -m tools.manage init
-    python -m tools.manage add-user alice            # prompts for a password
-    python -m tools.manage add-user alice --password s3cret
-    python -m tools.manage add-server server-001 --password op-pass
-    python -m tools.manage list
-    python -m tools.manage disable server-001
-    python -m tools.manage remove-server server-001
+    python -m relay.manage init
+    python -m relay.manage add-user alice            # prompts for a password
+    python -m relay.manage add-user alice --password s3cret
+    python -m relay.manage add-server server-001 --password op-pass --advertise-host relay.example.com
+    python -m relay.manage list
+    python -m relay.manage disable server-001
+    python -m relay.manage remove-server server-001
 """
 
 from __future__ import annotations
@@ -19,6 +19,37 @@ import sys
 
 from relay.config import RelayConfig
 from relay.db import RegistryDB
+
+
+def _format_host(host: str) -> str:
+    host = (host or "").strip()
+    if not host:
+        return ""
+    return f"[{host}]" if ":" in host and not host.startswith("[") else host
+
+
+def install_command(config: RelayConfig, name: str, token: str, advertise_host: str | None) -> str | None:
+    """Return the one-line ``curl ... | sudo bash`` installer, or None if web is off."""
+    if not config.web_enabled:
+        return None
+    host = _format_host(advertise_host or config.advertise_host)
+    if not host:
+        return None
+    return (
+        f"curl -fsSL 'http://{host}:{config.web_port}/install/{name}"
+        f"?token={token}' | sudo bash"
+    )
+
+
+def agent_command(config: RelayConfig, name: str, token: str, advertise_host: str | None, shell: str | None) -> str:
+    host = _format_host(advertise_host or config.advertise_host) or "<relay-host>"
+    command = (
+        f"python -m agent --relay ws://{host}:{config.ws_port}{config.ws_path} "
+        f"--id {name} --token {token}"
+    )
+    if shell:
+        command += f" --shell {shell}"
+    return command
 
 
 def _prompt_password(prompt: str) -> str:
@@ -53,7 +84,16 @@ def cmd_add_user(args: argparse.Namespace) -> int:
 
 
 def cmd_add_server(args: argparse.Namespace) -> int:
-    db = _open_db(args)
+    config = RelayConfig.load(args.config)
+    if args.advertise_host:
+        config.advertise_host = args.advertise_host
+    if args.web_port:
+        config.web_port = args.web_port
+    if args.ws_port:
+        config.ws_port = args.ws_port
+    db = RegistryDB(config.db_path)
+    db.init_schema()
+
     password = args.password or _prompt_password(f"Login password for server {args.name}: ")
     token = db.add_server(
         args.name,
@@ -63,14 +103,22 @@ def cmd_add_server(args: argparse.Namespace) -> int:
     )
     print(f"server '{args.name}' saved")
     print()
-    print("Agent token (shown once - store it on the internal server):")
+    print("Agent token (shown once - keep it secret):")
     print(f"  {token}")
     print()
-    print("Run the agent with:")
-    print(
-        f"  python -m agent --relay ws://<relay-host>:8765/agent "
-        f"--id {args.name} --token {token}"
-    )
+
+    installer = install_command(config, args.name, token, args.advertise_host)
+    if installer:
+        print("On the internal server, run this one-liner (as root):")
+        print()
+        print(f"  {installer}")
+        print()
+        print("It installs the agent, starts it now, and enables it on boot.")
+    else:
+        if config.web_enabled and not (args.advertise_host or config.advertise_host):
+            print("(pass --advertise-host to also print a one-line installer URL)")
+        print("Run the agent on the internal server with:")
+        print(f"  {agent_command(config, args.name, token, args.advertise_host, args.shell)}")
     return 0
 
 
@@ -122,6 +170,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_server.add_argument("--password", help="C2 login password (prompted if omitted)")
     p_server.add_argument("--description", default="")
     p_server.add_argument("--token", help="reuse an existing agent token")
+    p_server.add_argument("--advertise-host", help="public host for generated install URLs")
+    p_server.add_argument("--web-port", type=int, help="install web port (default: from config/1234)")
+    p_server.add_argument("--ws-port", type=int, help="agent WebSocket port (default: from config)")
+    p_server.add_argument("--shell", help="shell the agent should run")
     p_server.set_defaults(func=cmd_add_server)
 
     sub.add_parser("list", help="list internal servers").set_defaults(func=cmd_list)

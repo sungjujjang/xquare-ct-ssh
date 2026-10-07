@@ -2,7 +2,8 @@
 
 The agent authenticates with ``{"id": <server name>, "token": <secret>}`` and
 then keeps the connection open.  Every subsequent frame is a binary protocol
-frame (see :mod:`common.protocol`).
+frame (see :mod:`relay.protocol`).  The module is a vendored copy of
+``agent/protocol.py``; the two must stay byte-for-byte identical.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import logging
 import websockets
 from websockets.exceptions import ConnectionClosed
 
-from common import protocol
+from relay import protocol
 from relay.config import RelayConfig
 from relay.db import RegistryDB
 from relay.registry import AgentConnection, Registry

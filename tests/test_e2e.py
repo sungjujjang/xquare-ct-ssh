@@ -106,6 +106,11 @@ async def _scenario() -> None:
                 # Ctrl+L clears the C2 screen
                 proc.stdin.write(b"\x0c")
                 await out.until(b"\x1b[2J\x1b[H")
+
+                # creating a server from the C2 CLI prints a one-line installer
+                proc.stdin.write(b"add-server brand-new secret1\n")
+                await out.until(b"http://127.0.0.1:1234/install/brand-new?token=")
+
                 proc.stdin.write(b"login server-001 opsecret\n")
                 await out.until(b"Connected to server-001")
                 await out.until(b"$")

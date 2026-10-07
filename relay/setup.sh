@@ -5,8 +5,8 @@
 # Creates a Python virtualenv, writes a config file, initialises the SQLite
 # registry and installs a systemd service. Safe to re-run (idempotent).
 #
-#   sudo ./scripts/setup-relay.sh --admin-user alice
-#   sudo ./scripts/setup-relay.sh --ssh-port 2222 --ws-port 8765 --admin-user alice --admin-password s3cret
+#   sudo ./relay/setup.sh --admin-user alice
+#   sudo ./relay/setup.sh --ssh-port 2222 --ws-port 8765 --admin-user alice --admin-password s3cret
 #
 set -euo pipefail
 
@@ -17,6 +17,9 @@ SSH_HOST="0.0.0.0"
 SSH_PORT="2222"
 WS_HOST="0.0.0.0"
 WS_PORT="8765"
+WEB_HOST="0.0.0.0"
+WEB_PORT="1234"
+ADVERTISE_HOST=""
 INSTALL_DIR="/opt/xquare-ct-ssh-relay"
 CONFIG_DIR="/etc/xquare-ct-ssh"
 DATA_DIR="/var/lib/xquare-ct-ssh"
@@ -39,13 +42,16 @@ die()  { printf '%s[fail]%s %s\n'  "$C_ERR"  "$C_RESET" "$*" >&2; exit 1; }
 
 usage() {
   cat <<'EOF'
-Usage: sudo ./scripts/setup-relay.sh [options]
+Usage: sudo ./relay/setup.sh [options]
 
 Options:
   --ssh-host HOST        SSH bind address          (default: 0.0.0.0)
   --ssh-port PORT        SSH port                  (default: 2222)
   --ws-host HOST         Agent WebSocket bind      (default: 0.0.0.0)
   --ws-port PORT         Agent WebSocket port      (default: 8765)
+  --web-host HOST        installer web bind        (default: 0.0.0.0)
+  --web-port PORT        installer web port        (default: 1234)
+  --advertise-host HOST  public host for install URLs (default: auto)
   --install-dir DIR      application install dir   (default: /opt/xquare-ct-ssh-relay)
   --config-dir DIR       config dir                (default: /etc/xquare-ct-ssh)
   --data-dir DIR         database / host key dir   (default: /var/lib/xquare-ct-ssh)
@@ -69,6 +75,9 @@ while [ $# -gt 0 ]; do
     --ssh-port)        SSH_PORT="${2:?}"; shift 2 ;;
     --ws-host)         WS_HOST="${2:?}"; shift 2 ;;
     --ws-port)         WS_PORT="${2:?}"; shift 2 ;;
+    --web-host)        WEB_HOST="${2:?}"; shift 2 ;;
+    --web-port)        WEB_PORT="${2:?}"; shift 2 ;;
+    --advertise-host)  ADVERTISE_HOST="${2:?}"; shift 2 ;;
     --install-dir)     INSTALL_DIR="${2:?}"; shift 2 ;;
     --config-dir)      CONFIG_DIR="${2:?}"; shift 2 ;;
     --data-dir)        DATA_DIR="${2:?}"; shift 2 ;;
@@ -134,16 +143,22 @@ repo_root() {
 
 copy_source() {
   local repo="$1"
-  [ -d "$repo/relay" ] || die "cannot find 'relay/' next to $repo — run this script from the repository"
+  [ -d "$repo/relay" ] || die "cannot find 'relay/' next to $repo - run this script from the repository (relay/setup.sh)"
   log "installing application files into $INSTALL_DIR"
   mkdir -p "$INSTALL_DIR"
-  rm -rf "$INSTALL_DIR/relay" "$INSTALL_DIR/common" "$INSTALL_DIR/tools"
+  rm -rf "$INSTALL_DIR/relay"
   cp -a "$repo/relay" "$INSTALL_DIR/"
-  cp -a "$repo/common" "$INSTALL_DIR/"
-  cp -a "$repo/tools" "$INSTALL_DIR/"
-  cp -a "$repo/requirements-relay.txt" "$INSTALL_DIR/"
   [ -f "$repo/config.example.yaml" ] && cp -a "$repo/config.example.yaml" "$INSTALL_DIR/" || true
   [ -f "$repo/README.md" ] && cp -a "$repo/README.md" "$INSTALL_DIR/" || true
+
+  # Package the agent so the install web server can hand it out as a tarball.
+  if [ -d "$repo/agent" ]; then
+    log "packaging agent -> $INSTALL_DIR/agent-dist.tar.gz"
+    rm -f "$INSTALL_DIR/agent-dist.tar.gz"
+    tar -czf "$INSTALL_DIR/agent-dist.tar.gz" -C "$repo" agent
+  else
+    warn "no 'agent/' directory found - /agent.tar.gz will be unavailable"
+  fi
 }
 
 create_venv() {
@@ -152,7 +167,7 @@ create_venv() {
     python3 -m venv "$VENV"
   fi
   "$VENV/bin/pip" install --quiet --upgrade pip
-  "$VENV/bin/pip" install --quiet -r "$INSTALL_DIR/requirements-relay.txt"
+  "$VENV/bin/pip" install --quiet -r "$INSTALL_DIR/relay/requirements.txt"
   ok "python dependencies installed"
 }
 
@@ -176,6 +191,13 @@ relay:
   default_term: xterm-256color
   open_timeout: 15
   auth_timeout: 30
+  advertise_host: $ADVERTISE_HOST
+  agent_package: $INSTALL_DIR/agent-dist.tar.gz
+
+web:
+  web_enabled: true
+  web_host: $WEB_HOST
+  web_port: $WEB_PORT
 
 database:
   path: $DATA_DIR/relay.db
@@ -208,13 +230,13 @@ ensure_service_user() {
 
 init_database() {
   log "initialising registry database"
-  ( cd "$INSTALL_DIR" && "$PY" -m tools.manage -c "$CONFIG_FILE" init )
+  ( cd "$INSTALL_DIR" && "$PY" -m relay.manage -c "$CONFIG_FILE" init )
   if [ -n "$ADMIN_USER" ]; then
     if [ -n "$ADMIN_PASSWORD" ]; then
-      ( cd "$INSTALL_DIR" && "$PY" -m tools.manage -c "$CONFIG_FILE" \
+      ( cd "$INSTALL_DIR" && "$PY" -m relay.manage -c "$CONFIG_FILE" \
           add-user "$ADMIN_USER" --password "$ADMIN_PASSWORD" )
     else
-      ( cd "$INSTALL_DIR" && "$PY" -m tools.manage -c "$CONFIG_FILE" add-user "$ADMIN_USER" )
+      ( cd "$INSTALL_DIR" && "$PY" -m relay.manage -c "$CONFIG_FILE" add-user "$ADMIN_USER" )
     fi
     ok "relay SSH user '$ADMIN_USER' ready"
   fi
@@ -264,19 +286,22 @@ $(ok "relay server installation complete")
 
   SSH endpoint      : ssh <user>@$host -p $SSH_PORT
   Agent WebSocket   : ws://$host:$WS_PORT/agent
+  Install web       : http://$host:$WEB_PORT
   config            : $CONFIG_FILE
   database          : $DATA_DIR/relay.db
 
 Next steps
-  1. register an internal server (prints a one-time agent token):
-       $PY -m tools.manage -c $CONFIG_FILE add-server server-001 --password <login-pass>
+  1. open the firewall if needed:
+       ufw allow $SSH_PORT/tcp && ufw allow $WS_PORT/tcp && ufw allow $WEB_PORT/tcp
 
-  2. on the internal server, run the agent setup:
-       ./scripts/setup-agent.sh --relay ws://$host:$WS_PORT/agent \\
-           --id server-001 --token <token>
+  2. connect and create a server from the C2 CLI (id + password):
+       ssh <user>@$host -p $SSH_PORT
+       C2> add-server server-001
+     It prints a one-line installer, e.g.
+       curl -fsSL 'http://$host:$WEB_PORT/install/server-001?token=<token>' | sudo bash
 
-  3. open the firewall if needed:
-       ufw allow $SSH_PORT/tcp && ufw allow $WS_PORT/tcp
+  3. run that one-liner on the internal server: it installs the agent, starts
+     it now, and enables it on boot (systemd Restart=always).
 
 EOF
 }

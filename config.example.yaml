@@ -14,6 +14,18 @@ relay:
   default_term: xterm-256color
   open_timeout: 15
   auth_timeout: 30
+  # host/IP placed in generated install URLs; empty = use the address the
+  # operator connected to
+  advertise_host: ""
+  # agent tarball served at /agent.tar.gz
+  agent_package: agent-dist.tar.gz
+
+# Install web server: serves the agent package and one-line installers.
+# `add-server` in the C2 CLI prints a `curl ... | sudo bash` link served here.
+web:
+  web_enabled: true
+  web_host: 0.0.0.0
+  web_port: 1234
 
 database:
   path: data/relay.db

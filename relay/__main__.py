@@ -11,6 +11,7 @@ from relay.config import RelayConfig
 from relay.db import RegistryDB
 from relay.registry import Registry
 from relay.ssh_server import start_ssh_server
+from relay.web import start_web_server
 from relay.ws_server import start_ws_server
 
 log = logging.getLogger("relay")
@@ -24,6 +25,10 @@ async def amain(config: RelayConfig) -> None:
     ssh_listener = await start_ssh_server(db, registry, config)
     ws_server = await start_ws_server(db, registry, config)
 
+    web_server = None
+    if config.web_enabled:
+        web_server = start_web_server(db, config)
+
     log.info("SSH server listening on %s:%s", config.ssh_host, config.ssh_port)
     log.info(
         "Agent WebSocket listening on ws://%s:%s%s",
@@ -31,6 +36,13 @@ async def amain(config: RelayConfig) -> None:
         config.ws_port,
         config.ws_path,
     )
+    if web_server is not None:
+        log.info(
+            "install server listening on http://%s:%s (advertise_host=%r)",
+            config.web_host,
+            config.web_port,
+            config.advertise_host or "<auto>",
+        )
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -47,6 +59,8 @@ async def amain(config: RelayConfig) -> None:
     await ssh_listener.wait_closed()
     ws_server.close()
     await ws_server.wait_closed()
+    if web_server is not None:
+        web_server.close()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -54,6 +68,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-c", "--config", help="path to a YAML config file")
     parser.add_argument("--ssh-port", type=int, help="override SSH port")
     parser.add_argument("--ws-port", type=int, help="override agent WebSocket port")
+    parser.add_argument("--web-port", type=int, help="override install web port (default 1234)")
+    parser.add_argument("--advertise-host", help="public host used in generated install URLs")
+    parser.add_argument("--no-web", action="store_true", help="disable the install web server")
     parser.add_argument("--log-level", default=None)
     args = parser.parse_args(argv)
 
@@ -62,6 +79,12 @@ def main(argv: list[str] | None = None) -> int:
         config.ssh_port = args.ssh_port
     if args.ws_port:
         config.ws_port = args.ws_port
+    if args.web_port:
+        config.web_port = args.web_port
+    if args.advertise_host:
+        config.advertise_host = args.advertise_host
+    if args.no_web:
+        config.web_enabled = False
     if args.log_level:
         config.log_level = args.log_level
 

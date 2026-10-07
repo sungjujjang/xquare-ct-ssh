@@ -21,16 +21,20 @@ import asyncio
 import json
 import logging
 import os
+import re
 
 import asyncssh
 
-from common import protocol
+from relay import protocol
 from relay.config import RelayConfig
 from relay.db import RegistryDB
 from relay.lineeditor import LineEditor
+from relay.manage import agent_command, install_command
 from relay.registry import Registry, SessionBridge, allocate_session_id
 
 log = logging.getLogger("relay.ssh")
+
+_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 
 
 def load_or_create_host_key(path: str) -> asyncssh.SSHKey:
@@ -86,11 +90,13 @@ class RelaySession(asyncssh.SSHServerSession):
         db: RegistryDB,
         registry: Registry,
         config: RelayConfig,
+        conn: "asyncssh.SSHServerConnection | None" = None,
     ):
         self.username = username
         self.db = db
         self.registry = registry
         self.config = config
+        self._conn = conn
 
         self._chan: asyncssh.SSHServerChannel | None = None
         self._writer: ChannelWriter | None = None
@@ -199,7 +205,11 @@ class RelaySession(asyncssh.SSHServerSession):
                         break
                 if self._editor.eof:
                     break
-                if self._bridge is None and not self._exit_requested:
+                # The line editor already echoes each keystroke incrementally
+                # (and redraws itself for Ctrl+C/arrows/history).  Only print a
+                # fresh prompt once a command has completed, otherwise every
+                # keypress would redraw the whole prompt+line.
+                if lines and self._bridge is None and not self._exit_requested:
                     self._editor.render_prompt()
         except asyncio.CancelledError:  # pragma: no cover - shutdown
             pass
@@ -237,6 +247,8 @@ class RelaySession(asyncssh.SSHServerSession):
             self._print_help()
         elif command in ("list", "servers", "ls"):
             self._print_servers()
+        elif command in ("add-server", "addserver", "register"):
+            await self._cmd_add_server(args)
         elif command in ("login", "connect"):
             await self._cmd_login(args)
         elif command in ("ping",):
@@ -251,6 +263,7 @@ class RelaySession(asyncssh.SSHServerSession):
         self._emit_text(
             "\r\n\x1b[1mAvailable commands\x1b[0m\r\n"
             "  \x1b[36mlist\x1b[0m                    list known internal servers\r\n"
+            "  \x1b[36madd-server <id> [password]\x1b[0m create a server and print its one-line installer\r\n"
             "  \x1b[36mlogin <server> [password]\x1b[0m log in and attach to a server's shell\r\n"
             "  \x1b[36mping\x1b[0m                    check the C2 CLI is responsive\r\n"
             "  \x1b[36mhelp\x1b[0m                    show this help\r\n"
@@ -274,6 +287,66 @@ class RelaySession(asyncssh.SSHServerSession):
                 status = "\x1b[31moffline\x1b[0m"
             self._emit_text(f"  {server.name:<16} {status}  {server.description}\r\n")
         self._emit_text("\r\n")
+
+    def _default_host(self) -> str:
+        if self.config.advertise_host:
+            return self.config.advertise_host
+        conn = self._conn
+        if conn is not None:
+            try:
+                sockname = conn.get_extra_info("sockname")
+            except Exception:  # pragma: no cover - defensive
+                sockname = None
+            if sockname:
+                return sockname[0]
+        return ""
+
+    async def _cmd_add_server(self, args: list[str]) -> None:
+        if not args:
+            self._emit_text("usage: add-server <id> [password]\r\n")
+            return
+        name = args[0]
+        if not _NAME_RE.match(name):
+            self._emit_text(
+                "\x1b[31minvalid server id\x1b[0m "
+                "(lowercase letters, digits, '.', '_', '-'; start alphanumeric)\r\n"
+            )
+            return
+        if self.db.get_server(name) is not None:
+            self._emit_text(
+                f"server {name} already exists; remove it with the manage CLI then retry\r\n"
+            )
+            return
+
+        password = args[1] if len(args) > 1 else None
+        if password is None:
+            password = await self._read_password(f"Login password for new server {name}: ")
+            if password is None:
+                self._emit_text("cancelled\r\n")
+                return
+        if not password:
+            self._emit_text("password must not be empty\r\n")
+            return
+
+        token = self.db.add_server(name, password, description="created from C2")
+        host = self._default_host()
+        self._emit_text(f"\r\n\x1b[32mServer '{name}' created.\x1b[0m\r\n\r\n")
+
+        installer = install_command(self.config, name, token, host) if host else None
+        if installer:
+            self._emit_text(
+                "Run this one-liner on the internal server (as root):\r\n\r\n"
+                f"  \x1b[36m{installer}\x1b[0m\r\n\r\n"
+                "It installs the agent, starts it now, and enables it on boot.\r\n"
+                f"The server appears as \x1b[32monline\x1b[0m in 'list' once connected.\r\n"
+            )
+        else:
+            self._emit_text(
+                "Agent token (shown once - keep it secret):\r\n"
+                f"  {token}\r\n\r\n"
+                "On the internal server, run:\r\n"
+                f"  {agent_command(self.config, name, token, host or None, None)}\r\n"
+            )
 
     async def _cmd_login(self, args: list[str]) -> None:
         if not args:
@@ -385,7 +458,7 @@ class RelaySession(asyncssh.SSHServerSession):
         prefix = line[:cursor]
         # completing the command itself
         if " " not in prefix:
-            commands = ["help", "list", "login", "ping", "exit"]
+            commands = ["help", "list", "add-server", "login", "ping", "exit"]
             return [c for c in commands if c.startswith(prefix)]
         parts = prefix.split()
         if parts and parts[0] in ("login", "connect"):
@@ -449,7 +522,7 @@ class RelaySSHServer(asyncssh.SSHServer):
         return key.export_public_key() in self._authorized_keys
 
     def session_requested(self) -> RelaySession:
-        return RelaySession(self._username, self.db, self.registry, self.config)
+        return RelaySession(self._username, self.db, self.registry, self.config, self._conn)
 
 
 async def start_ssh_server(db: RegistryDB, registry: Registry, config: RelayConfig):

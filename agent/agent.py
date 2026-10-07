@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 import websockets
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidStatus
 
-from common import protocol
+from agent import protocol
 from agent.pty_backend import create_pty, default_shell
 
 log = logging.getLogger("agent")

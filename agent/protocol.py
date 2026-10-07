@@ -21,6 +21,9 @@ unsigned 32 bit id.  Messages that belong to a session carry that id; control
 messages (AUTH/PING/...) use session id ``0``.
 """
 
+# NOTE: vendored copy. This file is duplicated as ``agent/protocol.py`` and
+# ``relay/protocol.py`` so each folder can be shipped on its own. Keep identical.
+
 from __future__ import annotations
 
 import json

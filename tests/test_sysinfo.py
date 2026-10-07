@@ -31,3 +31,23 @@ def test_collect_net_shape():
 def test_collect_procs_respects_limit():
     data = sysinfo.collect("procs", {"n": 3})
     procs = data["processes"]
+    assert isinstance(procs, list)
+    assert len(procs) <= 3
+
+
+def test_unknown_command_raises():
+    with pytest.raises(ValueError):
+        sysinfo.collect("nope")
+
+
+def test_human_helpers():
+    from relay.ssh_server import _human_bytes, _human_duration
+
+    assert _human_bytes(0) == "0 B"
+    assert _human_bytes(1024) == "1.0 KiB"
+    assert _human_bytes(1536).endswith("KiB")
+    assert _human_bytes(None) == "-"
+    assert _human_duration(90) == "1m"
+    assert _human_duration(3661) == "1h 1m"
+    assert _human_duration(90061) == "1d 1h 1m"
+    assert _human_duration(None) == "-"

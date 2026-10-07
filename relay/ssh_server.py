@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import re
+import shlex
 
 import asyncssh
 
@@ -301,12 +302,30 @@ class RelaySession(asyncssh.SSHServerSession):
                 pass
 
     # -- command handling --------------------------------------------------
+    @staticmethod
+    def _split_args(line: str) -> list[str]:
+        """Split a C2 command line into words.
+
+        Plain input is split on whitespace (backslashes are kept verbatim so an
+        unquoted password is never mangled).  When the line contains quotes we
+        fall back to shell-like splitting so operators can pass passwords that
+        contain spaces or other special characters, e.g.::
+
+            add-server server-001 "p@ss !! word"
+        """
+        if "'" in line or '"' in line:
+            try:
+                return shlex.split(line)
+            except ValueError:
+                pass
+        return line.split()
+
     async def _handle_command(self, raw_line: str) -> None:
         line = raw_line.strip()
         if not line:
             return
         self._editor.add_history(line)
-        parts = line.split()
+        parts = self._split_args(line)
         command = parts[0].lower()
         args = parts[1:]
 
@@ -393,6 +412,9 @@ class RelaySession(asyncssh.SSHServerSession):
             "  \x1b[36mping\x1b[0m                        check the C2 CLI is responsive\r\n"
             "  \x1b[36mhelp\x1b[0m                        show this help\r\n"
             "  \x1b[36mexit\x1b[0m                        disconnect\r\n"
+            "\r\n"
+            "  \x1b[2mPasswords with spaces/special chars (e.g. '!!') should be quoted:\x1b[0m\r\n"
+            "  \x1b[2m  add-server s1 \"p@ss !! word\"   (or omit it and type at the hidden prompt)\x1b[0m\r\n"
             "\r\n"
         )
 

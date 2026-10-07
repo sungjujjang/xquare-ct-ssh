@@ -175,6 +175,12 @@ Run this one-liner on the internal server (as root):
   curl -fsSL 'http://<relay-host>:1234/install/server-001?token=xq_...' | sudo bash
 ```
 
+> **특수문자 비밀번호**: `!!`, 공백, `$`, 백틱 등이 들어간 비밀번호는 비밀번호를
+> 명령에 붙여 넣지 말고 `add-server <id>` 처럼 생략한 뒤 **에코 없는 입력
+> 프롬프트**(위 예시)에서 입력하세요. 그래야 셸의 이력 확장(`!!`)이나 인용
+> 처리에 값이 변형되지 않습니다. 부득이 한 줄로 줄 때는 따옴표로 감싸세요:
+> `add-server server-001 "p@ss !! word"`.
+
 내부 서버에서 그 한 줄만 실행하면:
 
 - `agent-dist.tar.gz` 다운로드 → `/opt/xquare-ct-ssh-agent` 설치
@@ -288,6 +294,11 @@ python -m agent --relay ws://relay-host:8765/agent --id win-001 --token xq_... -
 (기본 서비스 사용자가 `root`이면 `/root`). 바꾸려면 `--cwd /path`(또는 `XQ_CWD`,
 설정 파일의 `cwd:`)를 지정하세요. 우선순위: 릴레이 `OPEN`의 `cwd` → `--cwd`/`XQ_CWD`/`cwd:`
 → 사용자 홈.
+
+접속 셸은 **`bash`가 기본**입니다. `$SHELL`(systemd 환경에서 비어 있거나 `/bin/sh`인
+경우가 많음)에 의존하지 않고 `/bin/bash` → `/usr/bin/bash` → `/usr/local/bin/bash` 순으로
+찾아 사용하며, bash 가 없을 때만 `$SHELL`/`sh` 로 폴백합니다. 다른 셸을 쓰려면
+`--shell <path>`(또는 `XQ_SHELL`)로 명시하세요.
 
 ### 4) 접속
 

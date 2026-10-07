@@ -16,10 +16,11 @@ pytest.importorskip("asyncssh")
 import asyncssh  # noqa: E402
 
 from agent.agent import Agent, AgentConfig  # noqa: E402
+from agent.pty_backend import default_shell  # noqa: E402
 from relay.config import RelayConfig  # noqa: E402
 from relay.db import RegistryDB  # noqa: E402
 from relay.registry import Registry  # noqa: E402
-from relay.ssh_server import start_ssh_server  # noqa: E402
+from relay.ssh_server import RelaySession, start_ssh_server  # noqa: E402
 from relay.ws_server import start_ws_server  # noqa: E402
 
 BASH = shutil.which("bash") or shutil.which("sh")
@@ -262,3 +263,25 @@ def test_end_to_end_interactive_shell() -> None:
     if BASH is None:
         pytest.skip("no shell available")
     asyncio.run(_scenario())
+
+
+def test_c2_split_args_keeps_special_characters() -> None:
+    split = RelaySession._split_args
+    # `!!` and other metacharacters survive a plain (unquoted) password
+    assert split("add-server srv pa!!word") == ["add-server", "srv", "pa!!word"]
+    assert split("add-server srv p@ss#w!rd") == ["add-server", "srv", "p@ss#w!rd"]
+    # backslashes stay verbatim unless the operator quotes them
+    assert split(r"add-server srv a\b") == ["add-server", "srv", "a\\b"]
+    # quoting allows spaces and any special characters
+    assert split('add-server srv "pa !! word"') == ["add-server", "srv", "pa !! word"]
+    assert split("set-password srv 'a b!c'") == ["set-password", "srv", "a b!c"]
+
+
+def test_default_shell_prefers_bash() -> None:
+    import sys
+
+    if sys.platform == "win32":
+        pytest.skip("POSIX only")
+    if not (shutil.which("bash") or os.path.exists("/bin/bash")):
+        pytest.skip("bash not installed")
+    assert default_shell().endswith("bash")

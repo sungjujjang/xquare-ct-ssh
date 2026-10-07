@@ -28,12 +28,15 @@ def default_shell() -> str:
             if found:
                 return found
         return "cmd.exe"
+    # Prefer bash explicitly.  ``$SHELL`` is unreliable under systemd (it is
+    # frequently unset or set to ``/bin/sh``), and the interactive shell must
+    # not silently fall back to a POSIX ``sh``.
+    for candidate in ("/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"):
+        if os.path.exists(candidate):
+            return candidate
     shell = os.environ.get("SHELL")
     if shell and os.path.exists(shell):
         return shell
-    for candidate in ("/bin/bash", "/usr/bin/bash", "/bin/sh"):
-        if os.path.exists(candidate):
-            return candidate
     return "/bin/sh"
 
 

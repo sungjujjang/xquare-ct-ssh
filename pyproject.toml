@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xquare-ct-ssh"
+version = "0.1.0"
+description = "PTY-based SSH relay + internal agent for xquare Control Tower"
+requires-python = ">=3.10"
+dependencies = [
+    "asyncssh>=2.14",
+    "websockets>=13",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pyflakes>=3"]
+windows = ["pywinpty>=2.0"]
+
+[project.scripts]
+xq-relay = "relay.__main__:main"
+xq-agent = "agent.__main__:main"
+xq-manage = "tools.manage:main"
+
+[tool.setuptools]
+packages = ["common", "relay", "agent", "tools"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

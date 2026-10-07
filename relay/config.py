@@ -1,0 +1,96 @@
+"""Relay configuration loading."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from typing import Any
+
+import yaml
+
+DEFAULT_BANNER = (
+    "\r\n"
+    "\x1b[1;36m╔══════════════════════════════════════════╗\x1b[0m\r\n"
+    "\x1b[1;36m║        xquare Control Tower SSH          ║\x1b[0m\r\n"
+    "\x1b[1;36m╚══════════════════════════════════════════╝\x1b[0m\r\n"
+    "\r\n"
+    "Authorized operators only. Type \x1b[1mhelp\x1b[0m for commands.\r\n"
+)
+
+
+@dataclass
+class RelayConfig:
+    ssh_host: str = "0.0.0.0"
+    ssh_port: int = 2222
+    ws_host: str = "0.0.0.0"
+    ws_port: int = 8765
+    ws_path: str = "/agent"
+    host_key: str = "data/relay_host_key"
+    authorized_keys: str | None = "data/authorized_keys"
+    db_path: str = "data/relay.db"
+    allow_anonymous: bool = False
+    default_term: str = "xterm-256color"
+    auth_timeout: float = 30.0
+    ping_interval: float = 20.0
+    ping_timeout: float = 20.0
+    open_timeout: float = 15.0
+    log_level: str = "INFO"
+    banner: str = DEFAULT_BANNER
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def load(cls, path: str | None) -> "RelayConfig":
+        data: dict[str, Any] = {}
+        if path:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = yaml.safe_load(handle) or {}
+        relay = data.get("relay", {}) if isinstance(data, dict) else {}
+        database = data.get("database", {}) if isinstance(data, dict) else {}
+        logging = data.get("logging", {}) if isinstance(data, dict) else {}
+
+        config = cls()
+        simple_fields = (
+            "ssh_host",
+            "ssh_port",
+            "ws_host",
+            "ws_port",
+            "ws_path",
+            "host_key",
+            "authorized_keys",
+            "allow_anonymous",
+            "default_term",
+            "auth_timeout",
+            "ping_interval",
+            "ping_timeout",
+            "open_timeout",
+            "banner",
+        )
+        for name in simple_fields:
+            if name in relay:
+                setattr(config, name, relay[name])
+        if "path" in database:
+            config.db_path = database["path"]
+        if "level" in logging:
+            config.log_level = logging["level"]
+
+        # environment overrides (handy for containers)
+        env_map = {
+            "XQ_RELAY_SSH_HOST": "ssh_host",
+            "XQ_RELAY_SSH_PORT": "ssh_port",
+            "XQ_RELAY_WS_HOST": "ws_host",
+            "XQ_RELAY_WS_PORT": "ws_port",
+            "XQ_RELAY_HOST_KEY": "host_key",
+            "XQ_RELAY_DB": "db_path",
+            "XQ_RELAY_ALLOW_ANONYMOUS": "allow_anonymous",
+        }
+        for env_name, field_name in env_map.items():
+            if env_name in os.environ:
+                raw = os.environ[env_name]
+                current = getattr(config, field_name)
+                if isinstance(current, bool):
+                    setattr(config, field_name, raw.strip().lower() in ("1", "true", "yes", "on"))
+                elif isinstance(current, int):
+                    setattr(config, field_name, int(raw))
+                else:
+                    setattr(config, field_name, raw)
+        return config

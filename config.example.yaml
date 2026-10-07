@@ -1,0 +1,22 @@
+# xquare Control Tower SSH - relay server configuration
+relay:
+  ssh_host: 0.0.0.0
+  ssh_port: 2222
+  ws_host: 0.0.0.0
+  ws_port: 8765
+  ws_path: /agent
+  # ed25519 host key; generated on first start if missing
+  host_key: data/relay_host_key
+  # optional public-key auth file for operators (one key per line)
+  authorized_keys: data/authorized_keys
+  # DANGER: allow any username/password. Keep false in production.
+  allow_anonymous: false
+  default_term: xterm-256color
+  open_timeout: 15
+  auth_timeout: 30
+
+database:
+  path: data/relay.db
+
+logging:
+  level: INFO

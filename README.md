@@ -279,6 +279,11 @@ Windows:
 python -m agent --relay ws://relay-host:8765/agent --id win-001 --token xq_... --shell cmd.exe
 ```
 
+셸의 **시작 디렉터리**는 기본적으로 **에이전트 실행 사용자의 홈 디렉터리**입니다
+(기본 서비스 사용자가 `root`이면 `/root`). 바꾸려면 `--cwd /path`(또는 `XQ_CWD`,
+설정 파일의 `cwd:`)를 지정하세요. 우선순위: 릴레이 `OPEN`의 `cwd` → `--cwd`/`XQ_CWD`/`cwd:`
+→ 사용자 홈.
+
 ### 4) 접속
 
 접속 방식은 두 가지입니다.

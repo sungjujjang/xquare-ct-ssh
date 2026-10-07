@@ -8,13 +8,23 @@ from typing import Any
 
 import yaml
 
+_ART = (
+    "██╗  ██╗   ██████╗   ██╗   ██╗   █████╗   ██████╗   ███████╗\r\n"
+    "╚██╗██╔╝  ██╔═══██╗  ██║   ██║  ██╔══██╗  ██╔══██╗  ██╔════╝\r\n"
+    " ╚███╔╝   ██║   ██║  ██║   ██║  ███████║  ██████╔╝  █████╗  \r\n"
+    " ██╔██╗   ██║▄▄ ██║  ██║   ██║  ██╔══██║  ██╔══██╗  ██╔══╝  \r\n"
+    "██╔╝ ██╗  ╚██████╔╝  ╚██████╔╝  ██║  ██║  ██║  ██║  ███████╗\r\n"
+    "╚═╝  ╚═╝   ╚══▀▀═╝    ╚═════╝   ╚═╝  ╚═╝  ╚═╝  ╚═╝  ╚══════╝"
+)
+
 DEFAULT_BANNER = (
     "\r\n"
-    "\x1b[1;36m╔══════════════════════════════════════════╗\x1b[0m\r\n"
-    "\x1b[1;36m║        xquare Control Tower SSH          ║\x1b[0m\r\n"
-    "\x1b[1;36m╚══════════════════════════════════════════╝\x1b[0m\r\n"
+    "\x1b[1;36m" + _ART + "\x1b[0m\r\n"
     "\r\n"
-    "Authorized operators only. Type \x1b[1mhelp\x1b[0m for commands.\r\n"
+    "\x1b[1mxquare Control Tower\x1b[0m \x1b[2m·\x1b[0m \x1b[2mSecure SSH Relay\x1b[0m\r\n"
+    "\x1b[2mAuthorized operators only.\x1b[0m "
+    "\x1b[2mType\x1b[0m \x1b[1mhelp\x1b[0m \x1b[2mfor commands.\x1b[0m\r\n"
+    "\r\n"
 )
 
 

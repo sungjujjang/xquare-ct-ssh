@@ -37,6 +37,17 @@ def default_shell() -> str:
     return "/bin/sh"
 
 
+def default_cwd() -> str | None:
+    """Home directory of the agent's user; the shell starts here by default."""
+    try:
+        home = os.path.expanduser("~")
+    except Exception:  # pragma: no cover - defensive
+        return None
+    if home and home != "~" and os.path.isdir(home):
+        return home
+    return None
+
+
 class UnixPty:
     """POSIX pseudo terminal backed by a master fd registered with the loop."""
 
@@ -300,6 +311,8 @@ def create_pty(
     cwd: str | None = None,
 ):
     argv: list[str] = [shell]
+    if cwd is None:
+        cwd = default_cwd()
     if sys.platform == "win32":
         return WindowsPty(argv, cols, rows, env, cwd)
     return UnixPty(argv, cols, rows, env, cwd)

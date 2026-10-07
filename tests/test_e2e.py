@@ -135,6 +135,10 @@ async def _scenario() -> None:
                 await out.until(b"Connected to server-001")
                 await out.until(b"$")
 
+                # the shell starts in the agent user's home directory
+                proc.stdin.write(b"pwd\n")
+                await out.until(os.path.expanduser("~").encode())
+
                 # plain command echoed back through the real shell
                 proc.stdin.write(b"echo HELLO_E2E_MARKER\n")
                 await out.until(b"HELLO_E2E_MARKER")

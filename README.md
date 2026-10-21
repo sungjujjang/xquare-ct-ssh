@@ -195,11 +195,14 @@ sudo ./relay/setup.sh \
 --web-host
 --web-port
 --advertise-host
---domain              # Caddy TLS 활성화 (아래 참고)
---tls-mode            # internal | files | dns
---tls-cert / --tls-key
+--domain              # Caddy TLS, 두 서비스를 한 호스트로 (공유 포트)
+--ws-domain           # wss 호스트 (서비스별 호스트 모드)
+--web-domain          # https(설치 웹) 호스트
+--tls-mode            # acme | internal | files | dns
 --acme-email
+--tls-cert / --tls-key
 --dns-provider / --dns-token
+--ws-tls-port / --web-tls-port
 --ws-bind-port / --web-bind-port
 --admin-user
 --admin-password
@@ -214,25 +217,51 @@ sudo ./relay/setup.sh \
 
 ### 2. TLS (wss + https) 구성
 
-`--domain`을 지정하면 **Caddy**를 함께 설치하고, 기존 공개 포트(ws `8765`, web `1234`)를
-그대로 TLS 종단에 사용합니다. Python 서버는 loopback 바인드 포트로 옮겨집니다.
+두 가지 배포 형태를 지원합니다.
+
+**A. 서비스별 호스트 + 443 (공인 인증서 자동 발급, 권장)**
+
+`--ws-domain`/`--web-domain`을 각각 443에 두면 Caddy가 **ACME TLS-ALPN-01**로
+공인 인증서를 자동 발급합니다. 443만 사용하므로 80 포트는 필요 없습니다.
+클라이언트가 인증서를 정상 검증합니다(`tls_verify: true`).
 
 ```bash
 sudo ./relay/setup.sh \
-    --domain relay.example.com \
+    --tls-mode acme \
+    --ws-domain tunnel.xquare.xyz \
+    --web-domain xquare.xyz \
     --admin-user alice
 ```
 
-- **80/443 포트를 사용하지 않습니다.** WireGuard 대시보드 등 이미 그 포트를 쓰는
-  환경과 충돌하지 않습니다. Caddy의 내부 HTTP/HTTPS 포트는 `18080/18443`으로 낮춰 둡니다.
+- 사전 조건: `xquare.xyz`와 `tunnel.xquare.xyz`의 A 레코드가 이 서버 IP를 가리켜야 합니다.
+- 결과: 설치 웹은 `https://xquare.xyz`, 에이전트는 `wss://tunnel.xquare.xyz/agent`
+  (둘 다 443). 443 하나는 인증서 1장에만 묶이므로 서브도메인을 분리합니다.
+- 공인 인증서이므로 에이전트에 `-k`/`--no-verify-tls`가 붙지 않습니다.
+
+**B. 공유 포트 (80/443 미사용)**
+
+`--domain`을 지정하면 한 호스트의 기존 공개 포트(ws `8765`, web `1234`)를 그대로
+TLS 종단에 사용합니다. 80/443을 쓰지 않으므로 WireGuard 대시보드 등과 충돌하지
+않지만, 자동 ACME가 불가능해 자체 서명/직접 인증서가 필요합니다.
+
+```bash
+sudo ./relay/setup.sh --domain relay.example.com --admin-user alice
+```
+
+```text
+--tls-mode internal   # (기본값) Caddy 로컬 CA. 자동 생성되지만 공인 CA가 아니라서
+                      #   에이전트가 검증을 생략(curl -k / --no-verify-tls)하거나
+                      #   /ca.crt를 신뢰 등록해야 합니다.
+--tls-mode files      # --tls-cert / --tls-key 로 직접 인증서 지정
+--tls-mode dns        # ACME DNS-01 (--dns-provider cloudflare --dns-token <token>)
+                      #   해당 DNS 모듈이 포함된 Caddy 빌드 필요 (xcaddy)
+```
+
+공통 사항:
+
 - SSH 포트(2222)는 프록시를 거치지 않고 그대로 노출됩니다.
-- Caddy 인증서 발급 방식은 `--tls-mode`로 선택합니다:
-  - `internal` (기본값): Caddy 로컬 CA. 오프라인에서도 동작하지만 공인 CA가 아니므로
-    클라이언트가 인증서를 검증하지 않습니다(`tls_verify: false`). 루트 인증서는
-    `/ca.crt`로 제공되어 에이전트가 신뢰하도록 배포됩니다.
-  - `files`: `--tls-cert` / `--tls-key`로 직접 인증서를 지정합니다.
-  - `dns`: ACME DNS-01 챌린지. `--dns-provider cloudflare --dns-token <token>` 형태로
-    사용하며, 해당 DNS 모듈이 포함된 Caddy 빌드가 필요합니다(xcaddy).
+- Caddy의 내부 HTTP/HTTPS 포트는 `18080/18443`으로 낮춰 둡니다.
+- Python 서버는 loopback 바인드 포트로 이동합니다.
 
 설치 스크립트가 처리하는 작업:
 
@@ -321,17 +350,37 @@ NAT나 프록시 뒤에서 운영한다면 `advertise_host`를 직접 지정하�
 
 ### TLS 뒤에서 운영하기
 
-`relay/setup.sh --domain`으로 Caddy를 붙이면 아래 값이 자동으로 설정됩니다.
+`relay/setup.sh`로 Caddy를 붙이면 아래 값이 자동으로 설정됩니다.
 직접 구성하려면 동일하게 맞춰 주세요.
+
+서비스별 호스트 + 443 (공인 인증서 자동, 권장):
+
+```yaml
+relay:
+  advertise_host: tunnel.xquare.xyz     # 에이전트 wss 호스트
+  web_advertise_host: xquare.xyz        # 설치 웹 https 호스트
+  ws_port: 443                          # 공개 포트 (Caddy가 수신)
+  ws_bind_host: 127.0.0.1
+  ws_bind_port: 18765                   # Python 서버가 바인드하는 loopback 포트
+  tls: true
+  tls_verify: true                      # 공인 인증서 → 정상 검증
+
+web:
+  web_port: 443
+  web_bind_host: 127.0.0.1
+  web_bind_port: 11234
+```
+
+공유 포트 + internal (80/443 미사용):
 
 ```yaml
 relay:
   advertise_host: relay.example.com
-  ws_port: 8765          # 공개 포트 (Caddy가 수신)
+  ws_port: 8765
   ws_bind_host: 127.0.0.1
-  ws_bind_port: 18765    # Python 서버가 바인드하는 loopback 포트
-  tls: true              # 생성되는 URL/명령이 wss://, https:// 사용
-  tls_verify: false      # internal CA 사용 시 클라이언트 검증 생략
+  ws_bind_port: 18765
+  tls: true
+  tls_verify: false                     # internal CA → 검증 생략
   tls_ca_file: /etc/xquare-ct-ssh/caddy-root.crt  # /ca.crt로 배포
 
 web:
@@ -343,6 +392,7 @@ web:
 `tls: true`이면 `add-server`가 출력하는 설치 명령과 에이전트 실행 명령이
 각각 `https://`, `wss://`를 사용합니다. `tls_verify: false`이면 설치 명령에
 `curl -k`, 에이전트 명령에 `--no-verify-tls`가 추가됩니다.
+URL에서 스킴의 기본 포트(443/80)는 생략됩니다.
 
 ---
 

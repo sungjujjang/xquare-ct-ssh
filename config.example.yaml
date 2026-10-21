@@ -17,13 +17,16 @@ relay:
   # host/IP placed in generated install URLs; empty = use the address the
   # operator connected to
   advertise_host: ""
+  # host used in install/web URLs when it differs from advertise_host
+  # (e.g. advertise_host=tunnel.example.com for wss but web on example.com)
+  # web_advertise_host: example.com
   # agent tarball served at /agent.tar.gz
   agent_package: agent-dist.tar.gz
 
   # --- TLS (optional; normally set up automatically by relay/setup.sh) ------
-  # When a TLS terminator (Caddy) sits in front on the public ports, set
-  # `tls: true` and bind the Python servers to loopback ports.  Generated
-  # install URLs/agent commands then use wss:// and https://.
+  # When a TLS terminator (Caddy) sits in front, set `tls: true` and bind the
+  # Python servers to loopback ports.  Generated install URLs/agent commands
+  # then use wss:// and https://.
   # tls: true
   # tls_verify: false          # false = clients skip cert verification (internal CA)
   # tls_ca_file: /etc/xquare-ct-ssh/caddy-root.crt   # served at /ca.crt

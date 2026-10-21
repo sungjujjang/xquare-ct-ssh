@@ -1,11 +1,23 @@
 """Caddy reverse-proxy integration for the relay.
 
-Caddy terminates TLS for the two public relay ports (WebSocket and install web)
-and forwards to the Python servers, which bind only on loopback.  We deliberately
-avoid ports 80/443 so Caddy can coexist with other services (e.g. a WireGuard
-dashboard); ACME HTTP-01/TLS-ALPN-01 are therefore unavailable, so certificates
-come from one of:
+Caddy terminates TLS in front of the agent WebSocket and the install web server,
+forwarding to the Python servers which bind only on loopback.
 
+Two deployment shapes are supported:
+
+* **Shared port** (default): one domain, two public ports (e.g. ``:8765`` for
+  wss and ``:1234`` for https).  Because neither 80 nor 443 is used, automatic
+  ACME issuance is impossible and certificates come from ``internal``/``files``/
+  ``dns``.
+* **Per-service host** (``--ws-host``/``--web-host``): each service gets its own
+  host; if that host is served on port 443, ACME **TLS-ALPN-01** works and a
+  publicly trusted certificate is issued automatically (no port 80 needed).
+  Typically ``web_host=xquare.xyz`` and ``ws_host=tunnel.xquare.xyz``, both on 443.
+
+TLS modes:
+
+* ``acme``     - automatic public certificate via TLS-ALPN-01 (needs the service
+                 on port 443 and the host's A record pointing at this server)
 * ``internal`` - Caddy's local CA (self-signed; works offline, needs no ports)
 * ``files``    - a certificate/key pair provided by the operator
 * ``dns``      - an ACME DNS-01 challenge (requires a Caddy build that bundles
@@ -23,7 +35,7 @@ import sys
 
 import yaml
 
-TLS_MODES = ("internal", "files", "dns")
+TLS_MODES = ("acme", "internal", "files", "dns")
 
 # Caddy would otherwise grab these for ACME / HTTP->HTTPS redirects.
 _HTTP_PORT = 18080
@@ -38,6 +50,8 @@ def _tls_directive(
     dns_provider: str | None,
     dns_token: str | None,
 ) -> str:
+    if tls_mode == "acme":
+        return ""  # automatic HTTPS (TLS-ALPN-01); nothing to emit
     if tls_mode == "internal":
         return "tls internal"
     if tls_mode == "files":
@@ -57,13 +71,33 @@ def _tls_directive(
     raise ValueError(f"unknown tls mode: {tls_mode!r} (expected one of {', '.join(TLS_MODES)})")
 
 
+def _site(
+    *,
+    host: str,
+    port: int,
+    bind_port: int,
+    tls: str,
+) -> str:
+    """Render one Caddy site block (``host:port`` -> ``127.0.0.1:bind_port``)."""
+    address = host if port == 443 else f"{host}:{port}"
+    body = [address + " {"]
+    if tls:
+        for line in tls.splitlines():
+            body.append("\t" + line)
+    body.append(f"\treverse_proxy 127.0.0.1:{bind_port}")
+    body.append("}")
+    return "\n".join(body)
+
+
 def render_caddyfile(
     *,
-    domain: str,
-    ws_port: int,
-    web_port: int,
-    ws_bind_port: int,
-    web_bind_port: int,
+    ws_host: str | None = None,
+    web_host: str | None = None,
+    domain: str | None = None,
+    ws_port: int = 8765,
+    web_port: int = 1234,
+    ws_bind_port: int = 18765,
+    web_bind_port: int = 11234,
     tls_mode: str = "internal",
     cert_file: str | None = None,
     key_file: str | None = None,
@@ -71,8 +105,17 @@ def render_caddyfile(
     dns_provider: str | None = None,
     dns_token: str | None = None,
 ) -> str:
-    if not domain:
-        raise ValueError("a domain is required for the TLS proxy")
+    web_host = web_host or domain
+    ws_host = ws_host or domain
+    if not ws_host or not web_host:
+        raise ValueError("a domain (or ws_host/web_host) is required for the TLS proxy")
+
+    if tls_mode == "acme":
+        for host, port, kind in ((ws_host, ws_port, "ws"), (web_host, web_port, "web")):
+            if port != 443:
+                raise ValueError(
+                    f"tls-mode 'acme' (TLS-ALPN-01) requires {kind} on port 443, got {port}"
+                )
 
     tls = _tls_directive(
         tls_mode=tls_mode,
@@ -90,20 +133,16 @@ def render_caddyfile(
     if acme_email:
         global_lines.append(f"\temail {acme_email}")
 
+    sites = [
+        _site(host=ws_host, port=ws_port, bind_port=ws_bind_port, tls=tls),
+        _site(host=web_host, port=web_port, bind_port=web_bind_port, tls=tls),
+    ]
     return (
         "{\n"
         + "\n".join(global_lines)
         + "\n}\n\n"
-        # Agent WebSocket (wss)
-        f"{domain}:{ws_port} {{\n"
-        f"\t{tls}\n"
-        f"\treverse_proxy 127.0.0.1:{ws_bind_port}\n"
-        "}\n\n"
-        # Install web (https)
-        f"{domain}:{web_port} {{\n"
-        f"\t{tls}\n"
-        f"\treverse_proxy 127.0.0.1:{web_bind_port}\n"
-        "}\n"
+        + "\n\n".join(sites)
+        + "\n"
     )
 
 
@@ -131,18 +170,26 @@ def tls_config_updates(
     ws_bind_port: int,
     web_bind_port: int,
     advertise_host: str,
+    ws_port: int,
+    web_port: int,
+    web_advertise_host: str = "",
     ca_file: str = "",
 ) -> dict[str, dict]:
+    relay_updates = {
+        "advertise_host": advertise_host,
+        "ws_port": ws_port,
+        "ws_bind_host": "127.0.0.1",
+        "ws_bind_port": ws_bind_port,
+        "tls": True,
+        "tls_verify": tls_mode != "internal",
+        "tls_ca_file": ca_file,
+    }
+    if web_advertise_host:
+        relay_updates["web_advertise_host"] = web_advertise_host
     return {
-        "relay": {
-            "advertise_host": advertise_host,
-            "ws_bind_host": "127.0.0.1",
-            "ws_bind_port": ws_bind_port,
-            "tls": True,
-            "tls_verify": tls_mode != "internal",
-            "tls_ca_file": ca_file,
-        },
+        "relay": relay_updates,
         "web": {
+            "web_port": web_port,
             "web_bind_host": "127.0.0.1",
             "web_bind_port": web_bind_port,
         },
@@ -151,9 +198,11 @@ def tls_config_updates(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="render a Caddyfile for the xquare relay (TLS on the public relay ports)"
+        description="render a Caddyfile for the xquare relay (TLS in front of wss/https)"
     )
-    parser.add_argument("--domain", required=True)
+    parser.add_argument("--domain", help="host for both services (shared-port mode)")
+    parser.add_argument("--ws-host", help="host for the agent WebSocket (wss)")
+    parser.add_argument("--web-host", help="host for the install web server (https)")
     parser.add_argument("--ws-port", type=int, required=True)
     parser.add_argument("--web-port", type=int, required=True)
     parser.add_argument("--ws-bind-port", type=int, required=True)
@@ -172,6 +221,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    ws_host = args.ws_host or args.domain
+    web_host = args.web_host or args.domain
 
     if args.patch_config:
         patch_relay_config(
@@ -180,7 +231,10 @@ def main(argv: list[str] | None = None) -> int:
                 tls_mode=args.tls_mode,
                 ws_bind_port=args.ws_bind_port,
                 web_bind_port=args.web_bind_port,
-                advertise_host=args.advertise_host or args.domain,
+                ws_port=args.ws_port,
+                web_port=args.web_port,
+                advertise_host=args.advertise_host or ws_host or "",
+                web_advertise_host=web_host or "",
                 ca_file=args.tls_ca_file,
             ),
         )
@@ -188,7 +242,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         text = render_caddyfile(
-            domain=args.domain,
+            ws_host=ws_host,
+            web_host=web_host,
             ws_port=args.ws_port,
             web_port=args.web_port,
             ws_bind_port=args.ws_bind_port,

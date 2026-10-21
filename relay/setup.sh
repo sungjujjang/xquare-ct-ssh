@@ -32,11 +32,14 @@ SKIP_DEPS=0
 ALLOW_NONROOT=0
 
 # --- TLS (Caddy) ----------------------------------------------------------- #
-# Set --domain to put Caddy in front of the relay and terminate TLS on the
-# *same public ports* (ws 8765 -> wss, web 1234 -> https).  The Python servers
-# move to loopback-only bind ports so nothing but Caddy is exposed.
+# Set --domain (shared port) or --ws-domain/--web-domain (per-service host) to
+# put Caddy in front of the relay and terminate TLS.  With per-service hosts on
+# port 443, ACME TLS-ALPN-01 issues a public certificate automatically (the
+# Python servers move to loopback-only bind ports so nothing else is exposed).
 DOMAIN=""
-TLS_MODE="internal"          # internal | files | dns
+WS_DOMAIN=""
+WEB_DOMAIN=""
+TLS_MODE="internal"          # acme | internal | files | dns
 TLS_CERT=""
 TLS_KEY=""
 TLS_CA_FILE=""
@@ -47,6 +50,9 @@ WS_BIND_HOST="127.0.0.1"
 WS_BIND_PORT=""
 WEB_BIND_HOST="127.0.0.1"
 WEB_BIND_PORT=""
+# Public TLS listen ports (only used with --domain/--ws-domain/--web-domain).
+WS_PUBLIC_PORT=""
+WEB_PUBLIC_PORT=""
 CADDY_VERSION="${XQ_CADDY_VERSION:-2.9.1}"
 CADDYFILE="$CONFIG_DIR/Caddyfile"
 CADDY_ENV_FILE="$CONFIG_DIR/caddy.env"
@@ -77,13 +83,17 @@ Options:
   --web-host HOST        installer web bind        (default: 0.0.0.0)
   --web-port PORT        installer web port        (default: 1234)
   --advertise-host HOST  public host for install URLs (default: auto / --domain)
-  --domain DOMAIN        enable Caddy TLS on the public ports (wss + https)
-  --tls-mode MODE        internal | files | dns        (default: internal)
+  --domain DOMAIN        Caddy TLS, both services on this host (shared port)
+  --ws-domain DOMAIN     Caddy TLS host for the agent WebSocket (wss)
+  --web-domain DOMAIN    Caddy TLS host for the install web server (https)
+  --tls-mode MODE        acme | internal | files | dns   (default: internal)
+  --acme-email EMAIL     ACME account email (acme/dns)
   --tls-cert PATH        certificate (PEM) for --tls-mode files
   --tls-key PATH         private key (PEM) for --tls-mode files
-  --acme-email EMAIL     ACME account email (files/dns)
   --dns-provider NAME    DNS-01 provider module for --tls-mode dns (e.g. cloudflare)
   --dns-token TOKEN      DNS provider API token for --tls-mode dns
+  --ws-tls-port PORT     public wss port when using --ws-domain (default: ws+10000)
+  --web-tls-port PORT    public https port when using --web-domain (default: 443)
   --ws-bind-port PORT    loopback port for the agent WS backend (default: ws+10000)
   --web-bind-port PORT   loopback port for the install web backend (default: web+10000)
   --install-dir DIR      application install dir   (default: /opt/xquare-ct-ssh-relay)
@@ -113,12 +123,16 @@ while [ $# -gt 0 ]; do
     --web-port)        WEB_PORT="${2:?}"; shift 2 ;;
     --advertise-host)  ADVERTISE_HOST="${2:?}"; shift 2 ;;
     --domain)          DOMAIN="${2:?}"; shift 2 ;;
+    --ws-domain)       WS_DOMAIN="${2:?}"; shift 2 ;;
+    --web-domain)      WEB_DOMAIN="${2:?}"; shift 2 ;;
     --tls-mode)        TLS_MODE="${2:?}"; shift 2 ;;
     --tls-cert)        TLS_CERT="${2:?}"; shift 2 ;;
     --tls-key)         TLS_KEY="${2:?}"; shift 2 ;;
     --acme-email)      ACME_EMAIL="${2:?}"; shift 2 ;;
     --dns-provider)    DNS_PROVIDER="${2:?}"; shift 2 ;;
     --dns-token)       DNS_TOKEN="${2:?}"; shift 2 ;;
+    --ws-tls-port)     WS_PUBLIC_PORT="${2:?}"; shift 2 ;;
+    --web-tls-port)    WEB_PUBLIC_PORT="${2:?}"; shift 2 ;;
     --ws-bind-port)    WS_BIND_PORT="${2:?}"; shift 2 ;;
     --web-bind-port)   WEB_BIND_PORT="${2:?}"; shift 2 ;;
     --install-dir)     INSTALL_DIR="${2:?}"; shift 2 ;;
@@ -143,15 +157,37 @@ PY="$VENV/bin/python"
 # --------------------------------------------------------------------------- #
 # TLS option validation
 # --------------------------------------------------------------------------- #
-if [ -n "$DOMAIN" ]; then
+if [ -n "$DOMAIN" ] || [ -n "$WS_DOMAIN" ] || [ -n "$WEB_DOMAIN" ]; then
   TLS_ENABLED=1
-  [ -n "$ADVERTISE_HOST" ] || ADVERTISE_HOST="$DOMAIN"
+  # default the per-service hosts from --domain
+  [ -n "$WS_DOMAIN" ] || WS_DOMAIN="$DOMAIN"
+  [ -n "$WEB_DOMAIN" ] || WEB_DOMAIN="$DOMAIN"
+  case "$TLS_MODE" in
+    acme|internal|files|dns) : ;;
+    *) die "invalid --tls-mode '$TLS_MODE' (expected acme, internal, files or dns)" ;;
+  esac
+
+  if [ "$TLS_MODE" = "acme" ]; then
+    # TLS-ALPN-01 needs each host on port 443.
+    [ -n "$WS_PUBLIC_PORT" ] || WS_PUBLIC_PORT=443
+    [ -n "$WEB_PUBLIC_PORT" ] || WEB_PUBLIC_PORT=443
+    [ "$WS_PUBLIC_PORT" = "443" ] || die "--tls-mode acme requires the wss host on port 443 (got $WS_PUBLIC_PORT)"
+    [ "$WEB_PUBLIC_PORT" = "443" ] || die "--tls-mode acme requires the web host on port 443 (got $WEB_PUBLIC_PORT)"
+  else
+    # keep the current public ports unless overridden
+    [ -n "$WS_PUBLIC_PORT" ] || WS_PUBLIC_PORT="$WS_PORT"
+    [ -n "$WEB_PUBLIC_PORT" ] || WEB_PUBLIC_PORT="$WEB_PORT"
+  fi
+
   [ -n "$WS_BIND_PORT" ] || WS_BIND_PORT=$((WS_PORT + 10000))
   [ -n "$WEB_BIND_PORT" ] || WEB_BIND_PORT=$((WEB_PORT + 10000))
-  case "$TLS_MODE" in
-    internal|files|dns) : ;;
-    *) die "invalid --tls-mode '$TLS_MODE' (expected internal, files or dns)" ;;
-  esac
+  [ -n "$ADVERTISE_HOST" ] || ADVERTISE_HOST="$WS_DOMAIN"
+
+  # the Python servers (and the wss URL) use the public ports so Caddy, which
+  # receives them on its own advertised ports, can be reached at the same port.
+  WS_PORT="$WS_PUBLIC_PORT"
+  WEB_PORT="$WEB_PUBLIC_PORT"
+
   if [ "$TLS_MODE" = "files" ]; then
     [ -n "$TLS_CERT" ] && [ -n "$TLS_KEY" ] || die "--tls-mode files requires --tls-cert and --tls-key"
     [ -f "$TLS_CERT" ] || die "certificate not found: $TLS_CERT"
@@ -271,6 +307,7 @@ EOF
   tls: true
   tls_verify: $verify
   tls_ca_file: $TLS_CA_FILE
+  web_advertise_host: $WEB_DOMAIN
 EOF
   fi
   cat >> "$CONFIG_FILE" <<EOF
@@ -423,7 +460,8 @@ render_caddyfile() {
   log "rendering $CADDYFILE"
   mkdir -p "$CONFIG_DIR"
   local args=(
-    --domain "$DOMAIN"
+    --ws-host "$WS_DOMAIN"
+    --web-host "$WEB_DOMAIN"
     --ws-port "$WS_PORT"
     --web-port "$WEB_PORT"
     --ws-bind-port "$WS_BIND_PORT"
@@ -442,7 +480,8 @@ render_caddyfile() {
 patch_relay_config() {
   log "applying TLS settings to $CONFIG_FILE"
   ( cd "$INSTALL_DIR" && "$PY" -m relay.caddy --patch-config "$CONFIG_FILE" \
-      --domain "$DOMAIN" --ws-port "$WS_PORT" --web-port "$WEB_PORT" \
+      --ws-host "$WS_DOMAIN" --web-host "$WEB_DOMAIN" \
+      --ws-port "$WS_PORT" --web-port "$WEB_PORT" \
       --ws-bind-port "$WS_BIND_PORT" --web-bind-port "$WEB_BIND_PORT" \
       --tls-mode "$TLS_MODE" --advertise-host "$ADVERTISE_HOST" \
       --tls-ca-file "$TLS_CA_FILE" )
@@ -521,27 +560,33 @@ enable_tls() {
 }
 
 print_summary() {
-  local host ws_scheme http_scheme tls_block
+  local host ws_scheme http_scheme ws_addr web_addr tls_block
   ws_scheme="ws"; http_scheme="http"
   tls_block=""
+  host="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  [ -n "$host" ] || host="<this-host>"
+  ws_addr="$host:$WS_PORT"
+  web_addr="$host:$WEB_PORT"
   if [ "$TLS_ENABLED" = "1" ]; then
     ws_scheme="wss"; http_scheme="https"
+    ws_addr="$WS_DOMAIN"
+    web_addr="$WEB_DOMAIN"
+    [ "$WS_PORT" != "443" ] && ws_addr="$WS_DOMAIN:$WS_PORT"
+    [ "$WEB_PORT" != "443" ] && web_addr="$WEB_DOMAIN:$WEB_PORT"
     tls_block=$(cat <<EOF
 
-  TLS proxy         : caddy ($TLS_MODE) on $DOMAIN, public ports $WS_PORT/$WEB_PORT
+  TLS proxy         : caddy ($TLS_MODE), wss on $WS_DOMAIN:$WS_PORT, web on $WEB_DOMAIN:$WEB_PORT
   CA certificate    : ${TLS_CA_FILE:-(system trust store)}
 EOF
 )
   fi
-  host="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  [ -n "$host" ] || host="<this-host>"
   cat <<EOF
 
 $(ok "relay server installation complete")
 
   SSH endpoint      : ssh <user>@$host -p $SSH_PORT
-  Agent WebSocket   : $ws_scheme://$host:$WS_PORT/agent
-  Install web       : $http_scheme://$host:$WEB_PORT$tls_block
+  Agent WebSocket   : $ws_scheme://$ws_addr/agent
+  Install web       : $http_scheme://$web_addr$tls_block
   config            : $CONFIG_FILE
   database          : $DATA_DIR/relay.db
 
@@ -553,7 +598,7 @@ Next steps
        ssh <user>@$host -p $SSH_PORT
        C2> add-server server-001
      It prints a one-line installer, e.g.
-       curl -fsSL '$http_scheme://$host:$WEB_PORT/install/server-001?token=<token>' | sudo bash
+       curl -fsSL '$http_scheme://$web_addr/install/server-001?token=<token>' | sudo bash
 
   3. run that one-liner on the internal server: it installs the agent, starts
      it now, and enables it on boot (systemd Restart=always).

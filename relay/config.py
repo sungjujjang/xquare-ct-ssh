@@ -68,6 +68,9 @@ class RelayConfig:
     # host/IP placed in generated install URLs; falls back to the address the
     # operator connected to when empty
     advertise_host: str = ""
+    # host used in install/web URLs when it differs from advertise_host (e.g.
+    # advertise_host=tunnel.example.com for wss but web on example.com)
+    web_advertise_host: str = ""
     log_level: str = "INFO"
     banner: str = DEFAULT_BANNER
     extra: dict[str, Any] = field(default_factory=dict)
@@ -131,6 +134,7 @@ class RelayConfig:
             "ping_timeout",
             "open_timeout",
             "advertise_host",
+            "web_advertise_host",
             "banner",
         )
         for name in simple_fields:
@@ -163,6 +167,7 @@ class RelayConfig:
             "XQ_RELAY_WEB_HOST": ("web_host", "str"),
             "XQ_RELAY_WEB_PORT": ("web_port", "int"),
             "XQ_RELAY_ADVERTISE_HOST": ("advertise_host", "str"),
+            "XQ_RELAY_WEB_ADVERTISE_HOST": ("web_advertise_host", "str"),
             "XQ_RELAY_AGENT_PACKAGE": ("agent_package", "str"),
             "XQ_RELAY_TLS": ("tls", "bool"),
             "XQ_RELAY_TLS_VERIFY": ("tls_verify", "bool"),

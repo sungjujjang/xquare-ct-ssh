@@ -81,6 +81,25 @@ def test_install_and_agent_commands_use_tls() -> None:
     assert "--no-verify-tls" in agent
 
 
+def test_install_and_agent_commands_per_host_on_443() -> None:
+    config = RelayConfig(
+        tls=True,
+        tls_verify=True,
+        advertise_host="tunnel.xquare.xyz",
+        web_advertise_host="xquare.xyz",
+        ws_port=443,
+        web_port=443,
+    )
+    installer = install_command(config, "server-001", "xq_tok", None)
+    assert installer is not None
+    # web host used for the installer, default port 443 omitted
+    assert "'https://xquare.xyz/install/server-001?token=xq_tok'" in installer
+
+    agent = agent_command(config, "server-001", "xq_tok", None, None)
+    assert "wss://tunnel.xquare.xyz/agent" in agent
+    assert "--no-verify-tls" not in agent
+
+
 def test_install_command_plain_when_not_tls() -> None:
     config = RelayConfig(advertise_host="relay.example.com", web_port=1234)
     installer = install_command(config, "server-001", "xq_tok", None)
@@ -105,10 +124,36 @@ def test_render_caddyfile_internal_avoids_privileged_ports() -> None:
     assert "tls internal" in text
     assert "reverse_proxy 127.0.0.1:18765" in text
     assert "reverse_proxy 127.0.0.1:11234" in text
-    # never touch the privileged ports
-    assert ":80" not in text
-    assert ":443" not in text
-    assert "0.0.0.0:80 " not in text
+    assert "\n:443" not in text
+
+
+def test_render_caddyfile_acme_per_host_on_443() -> None:
+    text = render_caddyfile(
+        ws_host="tunnel.xquare.xyz",
+        web_host="xquare.xyz",
+        ws_port=443,
+        web_port=443,
+        ws_bind_port=18765,
+        web_bind_port=11234,
+        tls_mode="acme",
+    )
+    # bare host addresses (no :443) let Caddy auto-issue via TLS-ALPN-01
+    assert "tunnel.xquare.xyz {" in text
+    assert "xquare.xyz {" in text
+    assert "tls " not in text  # no explicit tls directive
+    assert "reverse_proxy 127.0.0.1:18765" in text
+    assert "reverse_proxy 127.0.0.1:11234" in text
+
+
+def test_render_caddyfile_acme_requires_443() -> None:
+    import pytest
+
+    with pytest.raises(ValueError):
+        render_caddyfile(
+            ws_host="tunnel.xquare.xyz", web_host="xquare.xyz",
+            ws_port=8765, web_port=443, ws_bind_port=1, web_bind_port=2,
+            tls_mode="acme",
+        )
 
 
 def test_render_caddyfile_files_requires_cert() -> None:
@@ -140,7 +185,10 @@ def test_patch_relay_config_merges_and_preserves(tmp_path) -> None:
             tls_mode="internal",
             ws_bind_port=18765,
             web_bind_port=11234,
-            advertise_host="relay.example.com",
+            ws_port=443,
+            web_port=443,
+            advertise_host="tunnel.xquare.xyz",
+            web_advertise_host="xquare.xyz",
             ca_file="/etc/xquare-ct-ssh/caddy-root.crt",
         ),
     )
@@ -148,9 +196,11 @@ def test_patch_relay_config_merges_and_preserves(tmp_path) -> None:
     assert data["relay"]["ssh_port"] == 2222  # preserved
     assert data["relay"]["tls"] is True
     assert data["relay"]["tls_verify"] is False
-    assert data["relay"]["advertise_host"] == "relay.example.com"
+    assert data["relay"]["advertise_host"] == "tunnel.xquare.xyz"
+    assert data["relay"]["web_advertise_host"] == "xquare.xyz"
+    assert data["relay"]["ws_port"] == 443
     assert data["relay"]["ws_bind_port"] == 18765
-    assert data["web"]["web_port"] == 1234  # preserved
+    assert data["web"]["web_port"] == 443
     assert data["web"]["web_bind_port"] == 11234
 
     # round-trips through RelayConfig

@@ -133,6 +133,15 @@ def _format_host(host: str) -> str:
     return f"[{host}]" if ":" in host and not host.startswith("[") else host
 
 
+def _authority(host: str, port: int, scheme: str) -> str:
+    """``host:port`` for a URL, omitting the scheme's default port."""
+    display = _format_host(host)
+    default_port = {"https": 443, "wss": 443, "http": 80, "ws": 80}.get(scheme)
+    if default_port is not None and port == default_port:
+        return display
+    return f"{display}:{port}"
+
+
 class _InstallHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -208,13 +217,13 @@ class _InstallRequestHandler(BaseHTTPRequestHandler):
         host = config.advertise_host or _host_from_header(self.headers.get("Host", ""))
         if not host:
             host = self.connection.getsockname()[0]
-        display = _format_host(host)
+        web_host = config.web_advertise_host or host
         scheme = config.http_scheme
-        relay_url = f"{config.ws_scheme}://{display}:{config.ws_port}{config.ws_path}"
-        package_url = f"{scheme}://{display}:{config.web_port}{PACKAGE_PATH}"
-        url = f"{scheme}://{display}:{config.web_port}{INSTALL_PATH}{name}?token={token}"
+        relay_url = f"{config.ws_scheme}://{_authority(host, config.ws_port, config.ws_scheme)}{config.ws_path}"
+        package_url = f"{scheme}://{_authority(web_host, config.web_port, scheme)}{PACKAGE_PATH}"
+        url = f"{scheme}://{_authority(web_host, config.web_port, scheme)}{INSTALL_PATH}{name}?token={token}"
         ca_url = (
-            _sh_single(f"{scheme}://{display}:{config.web_port}{CA_PATH}")
+            _sh_single(f"{scheme}://{_authority(web_host, config.web_port, scheme)}{CA_PATH}")
             if config.tls_ca_file
             else "''"
         )

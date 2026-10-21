@@ -141,6 +141,9 @@ def test_render_caddyfile_acme_per_host_on_443() -> None:
     assert "tunnel.xquare.xyz {" in text
     assert "xquare.xyz {" in text
     assert "tls " not in text  # no explicit tls directive
+    # must bind the standard ports so the ACME challenge can be answered
+    assert "http_port" not in text
+    assert "https_port" not in text
     assert "reverse_proxy 127.0.0.1:18765" in text
     assert "reverse_proxy 127.0.0.1:11234" in text
 

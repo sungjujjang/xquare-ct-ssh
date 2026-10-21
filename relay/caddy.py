@@ -125,11 +125,12 @@ def render_caddyfile(
         dns_token=dns_token,
     )
 
-    global_lines = [
-        f"\thttp_port {_HTTP_PORT}",
-        f"\thttps_port {_HTTPS_PORT}",
-        "\tauto_https disable_redirects",
-    ]
+    global_lines = [f"\thttp_port {_HTTP_PORT}", f"\thttps_port {_HTTPS_PORT}"]
+    if tls_mode == "acme":
+        # ACME (TLS-ALPN-01) must answer on the standard 443 (and http-01 on 80),
+        # so do NOT relocate the ports; only stop the automatic HTTP->HTTPS
+        # redirect from grabbing port 80.
+        global_lines = ["\tauto_https disable_redirects"]
     if acme_email:
         global_lines.append(f"\temail {acme_email}")
 

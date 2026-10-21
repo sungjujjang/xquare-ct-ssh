@@ -131,8 +131,8 @@ async def start_ws_server(db: RegistryDB, registry: Registry, config: RelayConfi
     handler = make_agent_handler(db, registry, config)
     server = await websockets.serve(
         handler,
-        config.ws_host,
-        config.ws_port,
+        config.ws_listen_host,
+        config.ws_listen_port,
         max_size=protocol.MAX_FRAME_SIZE,
         ping_interval=config.ping_interval,
         ping_timeout=config.ping_timeout,

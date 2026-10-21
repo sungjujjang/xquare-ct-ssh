@@ -20,12 +20,24 @@ relay:
   # agent tarball served at /agent.tar.gz
   agent_package: agent-dist.tar.gz
 
+  # --- TLS (optional; normally set up automatically by relay/setup.sh) ------
+  # When a TLS terminator (Caddy) sits in front on the public ports, set
+  # `tls: true` and bind the Python servers to loopback ports.  Generated
+  # install URLs/agent commands then use wss:// and https://.
+  # tls: true
+  # tls_verify: false          # false = clients skip cert verification (internal CA)
+  # tls_ca_file: /etc/xquare-ct-ssh/caddy-root.crt   # served at /ca.crt
+  # ws_bind_host: 127.0.0.1
+  # ws_bind_port: 18765
+
 # Install web server: serves the agent package and one-line installers.
 # `add-server` in the C2 CLI prints a `curl ... | sudo bash` link served here.
 web:
   web_enabled: true
   web_host: 0.0.0.0
   web_port: 1234
+  # web_bind_host: 127.0.0.1
+  # web_bind_port: 11234
 
 database:
   path: data/relay.db

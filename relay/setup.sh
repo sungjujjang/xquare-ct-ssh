@@ -31,6 +31,31 @@ INSTALL_SERVICE=1
 SKIP_DEPS=0
 ALLOW_NONROOT=0
 
+# --- TLS (Caddy) ----------------------------------------------------------- #
+# Set --domain to put Caddy in front of the relay and terminate TLS on the
+# *same public ports* (ws 8765 -> wss, web 1234 -> https).  The Python servers
+# move to loopback-only bind ports so nothing but Caddy is exposed.
+DOMAIN=""
+TLS_MODE="internal"          # internal | files | dns
+TLS_CERT=""
+TLS_KEY=""
+TLS_CA_FILE=""
+ACME_EMAIL=""
+DNS_PROVIDER=""
+DNS_TOKEN=""
+WS_BIND_HOST="127.0.0.1"
+WS_BIND_PORT=""
+WEB_BIND_HOST="127.0.0.1"
+WEB_BIND_PORT=""
+CADDY_VERSION="${XQ_CADDY_VERSION:-2.9.1}"
+CADDYFILE="$CONFIG_DIR/Caddyfile"
+CADDY_ENV_FILE="$CONFIG_DIR/caddy.env"
+CADDY_DATA_DIR="/var/lib/xquare-ct-ssh/caddy-data"
+CADDY_SERVICE="xq-caddy"
+CADDY_CERT=""
+CADDY_KEY=""
+TLS_ENABLED=0
+
 # --------------------------------------------------------------------------- #
 # pretty logging
 # --------------------------------------------------------------------------- #
@@ -51,7 +76,16 @@ Options:
   --ws-port PORT         Agent WebSocket port      (default: 8765)
   --web-host HOST        installer web bind        (default: 0.0.0.0)
   --web-port PORT        installer web port        (default: 1234)
-  --advertise-host HOST  public host for install URLs (default: auto)
+  --advertise-host HOST  public host for install URLs (default: auto / --domain)
+  --domain DOMAIN        enable Caddy TLS on the public ports (wss + https)
+  --tls-mode MODE        internal | files | dns        (default: internal)
+  --tls-cert PATH        certificate (PEM) for --tls-mode files
+  --tls-key PATH         private key (PEM) for --tls-mode files
+  --acme-email EMAIL     ACME account email (files/dns)
+  --dns-provider NAME    DNS-01 provider module for --tls-mode dns (e.g. cloudflare)
+  --dns-token TOKEN      DNS provider API token for --tls-mode dns
+  --ws-bind-port PORT    loopback port for the agent WS backend (default: ws+10000)
+  --web-bind-port PORT   loopback port for the install web backend (default: web+10000)
   --install-dir DIR      application install dir   (default: /opt/xquare-ct-ssh-relay)
   --config-dir DIR       config dir                (default: /etc/xquare-ct-ssh)
   --data-dir DIR         database / host key dir   (default: /var/lib/xquare-ct-ssh)
@@ -78,6 +112,15 @@ while [ $# -gt 0 ]; do
     --web-host)        WEB_HOST="${2:?}"; shift 2 ;;
     --web-port)        WEB_PORT="${2:?}"; shift 2 ;;
     --advertise-host)  ADVERTISE_HOST="${2:?}"; shift 2 ;;
+    --domain)          DOMAIN="${2:?}"; shift 2 ;;
+    --tls-mode)        TLS_MODE="${2:?}"; shift 2 ;;
+    --tls-cert)        TLS_CERT="${2:?}"; shift 2 ;;
+    --tls-key)         TLS_KEY="${2:?}"; shift 2 ;;
+    --acme-email)      ACME_EMAIL="${2:?}"; shift 2 ;;
+    --dns-provider)    DNS_PROVIDER="${2:?}"; shift 2 ;;
+    --dns-token)       DNS_TOKEN="${2:?}"; shift 2 ;;
+    --ws-bind-port)    WS_BIND_PORT="${2:?}"; shift 2 ;;
+    --web-bind-port)   WEB_BIND_PORT="${2:?}"; shift 2 ;;
     --install-dir)     INSTALL_DIR="${2:?}"; shift 2 ;;
     --config-dir)      CONFIG_DIR="${2:?}"; shift 2 ;;
     --data-dir)        DATA_DIR="${2:?}"; shift 2 ;;
@@ -96,6 +139,31 @@ done
 CONFIG_FILE="$CONFIG_DIR/relay.yaml"
 VENV="$INSTALL_DIR/venv"
 PY="$VENV/bin/python"
+
+# --------------------------------------------------------------------------- #
+# TLS option validation
+# --------------------------------------------------------------------------- #
+if [ -n "$DOMAIN" ]; then
+  TLS_ENABLED=1
+  [ -n "$ADVERTISE_HOST" ] || ADVERTISE_HOST="$DOMAIN"
+  [ -n "$WS_BIND_PORT" ] || WS_BIND_PORT=$((WS_PORT + 10000))
+  [ -n "$WEB_BIND_PORT" ] || WEB_BIND_PORT=$((WEB_PORT + 10000))
+  case "$TLS_MODE" in
+    internal|files|dns) : ;;
+    *) die "invalid --tls-mode '$TLS_MODE' (expected internal, files or dns)" ;;
+  esac
+  if [ "$TLS_MODE" = "files" ]; then
+    [ -n "$TLS_CERT" ] && [ -n "$TLS_KEY" ] || die "--tls-mode files requires --tls-cert and --tls-key"
+    [ -f "$TLS_CERT" ] || die "certificate not found: $TLS_CERT"
+    [ -f "$TLS_KEY" ] || die "key not found: $TLS_KEY"
+  fi
+  if [ "$TLS_MODE" = "dns" ]; then
+    [ -n "$DNS_PROVIDER" ] && [ -n "$DNS_TOKEN" ] || die "--tls-mode dns requires --dns-provider and --dns-token"
+  fi
+  if [ "$TLS_MODE" = "internal" ] && [ -z "$TLS_CA_FILE" ]; then
+    TLS_CA_FILE="$CONFIG_DIR/caddy-root.crt"
+  fi
+fi
 
 # --------------------------------------------------------------------------- #
 # helpers
@@ -193,11 +261,32 @@ relay:
   auth_timeout: 30
   advertise_host: $ADVERTISE_HOST
   agent_package: $INSTALL_DIR/agent-dist.tar.gz
+EOF
+  if [ "$TLS_ENABLED" = "1" ]; then
+    local verify=true
+    [ "$TLS_MODE" = "internal" ] && verify=false
+    cat >> "$CONFIG_FILE" <<EOF
+  ws_bind_host: $WS_BIND_HOST
+  ws_bind_port: $WS_BIND_PORT
+  tls: true
+  tls_verify: $verify
+  tls_ca_file: $TLS_CA_FILE
+EOF
+  fi
+  cat >> "$CONFIG_FILE" <<EOF
 
 web:
   web_enabled: true
   web_host: $WEB_HOST
   web_port: $WEB_PORT
+EOF
+  if [ "$TLS_ENABLED" = "1" ]; then
+    cat >> "$CONFIG_FILE" <<EOF
+  web_bind_host: $WEB_BIND_HOST
+  web_bind_port: $WEB_BIND_PORT
+EOF
+  fi
+  cat >> "$CONFIG_FILE" <<EOF
 
 database:
   path: $DATA_DIR/relay.db
@@ -276,8 +365,174 @@ EOF
   ok "service '$SERVICE_NAME' enabled and started"
 }
 
+install_caddy() {
+  [ "$TLS_ENABLED" = "1" ] || return 0
+  if command -v caddy >/dev/null 2>&1; then
+    ok "caddy already installed: $(caddy version 2>/dev/null | head -n1)"
+    return 0
+  fi
+  if [ "$SKIP_DEPS" = "1" ]; then
+    warn "skipping caddy install (--skip-deps): install caddy before starting $CADDY_SERVICE"
+    return 0
+  fi
+  log "installing caddy"
+  if apt-get install -y --no-install-recommends caddy >/dev/null 2>&1; then
+    ok "caddy installed via apt"
+    return 0
+  fi
+  local arch
+  case "$(uname -m)" in
+    x86_64|amd64) arch=amd64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) warn "unsupported architecture $(uname -m); install caddy manually"; return 0 ;;
+  esac
+  warn "apt could not install caddy; downloading the static binary v$CADDY_VERSION"
+  local tmp url
+  tmp="$(mktemp -d)"
+  url="https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${arch}.tar.gz"
+  if curl -fsSL "$url" -o "$tmp/caddy.tar.gz" && tar -xzf "$tmp/caddy.tar.gz" -C "$tmp" caddy; then
+    install -m 0755 "$tmp/caddy" /usr/local/bin/caddy
+    ok "caddy installed to /usr/local/bin/caddy"
+  else
+    warn "could not download caddy; install it manually, then: systemctl restart $CADDY_SERVICE"
+  fi
+  rm -rf "$tmp"
+}
+
+prepare_tls_certs() {
+  [ "$TLS_MODE" = "files" ] || return 0
+  log "installing provided certificate into $CONFIG_DIR/tls"
+  mkdir -p "$CONFIG_DIR/tls"
+  cp -f "$TLS_CERT" "$CONFIG_DIR/tls/fullchain.pem"
+  cp -f "$TLS_KEY" "$CONFIG_DIR/tls/privkey.pem"
+  chmod 600 "$CONFIG_DIR/tls/privkey.pem"
+  CADDY_CERT="$CONFIG_DIR/tls/fullchain.pem"
+  CADDY_KEY="$CONFIG_DIR/tls/privkey.pem"
+}
+
+write_caddy_env() {
+  if [ "$TLS_MODE" = "dns" ] && [ -n "$DNS_TOKEN" ]; then
+    umask 077
+    printf 'XQ_CADDY_DNS_TOKEN=%s\n' "$DNS_TOKEN" > "$CADDY_ENV_FILE"
+    chmod 600 "$CADDY_ENV_FILE"
+    ok "wrote $CADDY_ENV_FILE"
+  fi
+}
+
+render_caddyfile() {
+  log "rendering $CADDYFILE"
+  mkdir -p "$CONFIG_DIR"
+  local args=(
+    --domain "$DOMAIN"
+    --ws-port "$WS_PORT"
+    --web-port "$WEB_PORT"
+    --ws-bind-port "$WS_BIND_PORT"
+    --web-bind-port "$WEB_BIND_PORT"
+    --tls-mode "$TLS_MODE"
+  )
+  [ -n "$CADDY_CERT" ] && args+=(--tls-cert "$CADDY_CERT")
+  [ -n "$CADDY_KEY" ] && args+=(--tls-key "$CADDY_KEY")
+  [ -n "$ACME_EMAIL" ] && args+=(--acme-email "$ACME_EMAIL")
+  [ -n "$DNS_PROVIDER" ] && args+=(--dns-provider "$DNS_PROVIDER")
+  [ -n "$DNS_TOKEN" ] && args+=(--dns-token "$DNS_TOKEN")
+  ( cd "$INSTALL_DIR" && "$PY" -m relay.caddy "${args[@]}" ) > "$CADDYFILE"
+  ok "caddyfile written"
+}
+
+patch_relay_config() {
+  log "applying TLS settings to $CONFIG_FILE"
+  ( cd "$INSTALL_DIR" && "$PY" -m relay.caddy --patch-config "$CONFIG_FILE" \
+      --domain "$DOMAIN" --ws-port "$WS_PORT" --web-port "$WEB_PORT" \
+      --ws-bind-port "$WS_BIND_PORT" --web-bind-port "$WEB_BIND_PORT" \
+      --tls-mode "$TLS_MODE" --advertise-host "$ADVERTISE_HOST" \
+      --tls-ca-file "$TLS_CA_FILE" )
+  ok "config updated"
+}
+
+install_caddy_service() {
+  [ "$TLS_ENABLED" = "1" ] || return 0
+  if [ "$INSTALL_SERVICE" = "0" ]; then
+    warn "skipping caddy systemd install (--no-service); run manually:"
+    warn "  XDG_DATA_HOME=$CADDY_DATA_DIR caddy run --config $CADDYFILE --adapter caddyfile"
+    return 0
+  fi
+  local caddy_bin
+  caddy_bin="$(command -v caddy || true)"
+  if [ -z "$caddy_bin" ]; then
+    warn "caddy not found; skipping $CADDY_SERVICE (install caddy, then re-run this script)"
+    return 0
+  fi
+  if [ "$TLS_MODE" = "dns" ] && ! "$caddy_bin" list-modules 2>/dev/null | grep -q "dns.providers.$DNS_PROVIDER"; then
+    warn "this caddy build lacks the '$DNS_PROVIDER' module; DNS-01 will fail until you install one that bundles it"
+  fi
+
+  local unit="/etc/systemd/system/$CADDY_SERVICE.service"
+  log "installing systemd unit $unit"
+  mkdir -p "$CADDY_DATA_DIR"
+  cat > "$unit" <<EOF
+[Unit]
+Description=xquare Control Tower TLS proxy (caddy)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=XDG_DATA_HOME=$CADDY_DATA_DIR
+EnvironmentFile=-$CADDY_ENV_FILE
+ExecStart=$caddy_bin run --config $CADDYFILE --adapter caddyfile
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable "$CADDY_SERVICE" >/dev/null
+  systemctl restart "$CADDY_SERVICE"
+  ok "service '$CADDY_SERVICE' enabled and started"
+}
+
+export_internal_ca() {
+  [ "$TLS_MODE" = "internal" ] || return 0
+  local src="$CADDY_DATA_DIR/caddy/pki/authorities/local/root.crt" i
+  log "waiting for caddy's internal root CA"
+  for i in $(seq 1 30); do
+    [ -f "$src" ] && break
+    sleep 0.5
+  done
+  if [ -f "$src" ]; then
+    cp -f "$src" "$TLS_CA_FILE"
+    chmod 644 "$TLS_CA_FILE"
+    ok "internal CA exported to $TLS_CA_FILE"
+  else
+    warn "caddy root CA not found at $src yet; it will be served at /ca.crt once caddy starts"
+  fi
+}
+
+enable_tls() {
+  install_caddy
+  prepare_tls_certs
+  write_caddy_env
+  render_caddyfile
+  patch_relay_config
+  install_caddy_service
+  export_internal_ca
+}
+
 print_summary() {
-  local host
+  local host ws_scheme http_scheme tls_block
+  ws_scheme="ws"; http_scheme="http"
+  tls_block=""
+  if [ "$TLS_ENABLED" = "1" ]; then
+    ws_scheme="wss"; http_scheme="https"
+    tls_block=$(cat <<EOF
+
+  TLS proxy         : caddy ($TLS_MODE) on $DOMAIN, public ports $WS_PORT/$WEB_PORT
+  CA certificate    : ${TLS_CA_FILE:-(system trust store)}
+EOF
+)
+  fi
   host="$(hostname -I 2>/dev/null | awk '{print $1}')"
   [ -n "$host" ] || host="<this-host>"
   cat <<EOF
@@ -285,8 +540,8 @@ print_summary() {
 $(ok "relay server installation complete")
 
   SSH endpoint      : ssh <user>@$host -p $SSH_PORT
-  Agent WebSocket   : ws://$host:$WS_PORT/agent
-  Install web       : http://$host:$WEB_PORT
+  Agent WebSocket   : $ws_scheme://$host:$WS_PORT/agent
+  Install web       : $http_scheme://$host:$WEB_PORT$tls_block
   config            : $CONFIG_FILE
   database          : $DATA_DIR/relay.db
 
@@ -298,7 +553,7 @@ Next steps
        ssh <user>@$host -p $SSH_PORT
        C2> add-server server-001
      It prints a one-line installer, e.g.
-       curl -fsSL 'http://$host:$WEB_PORT/install/server-001?token=<token>' | sudo bash
+       curl -fsSL '$http_scheme://$host:$WEB_PORT/install/server-001?token=<token>' | sudo bash
 
   3. run that one-liner on the internal server: it installs the agent, starts
      it now, and enables it on boot (systemd Restart=always).
@@ -319,6 +574,7 @@ main() {
   copy_source "$repo"
   create_venv
   write_config
+  enable_tls
   ensure_service_user
   init_database
   install_service

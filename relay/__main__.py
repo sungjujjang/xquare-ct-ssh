@@ -32,16 +32,18 @@ async def amain(config: RelayConfig) -> None:
 
     log.info("SSH server listening on %s:%s", config.ssh_host, config.ssh_port)
     log.info(
-        "Agent WebSocket listening on ws://%s:%s%s",
-        config.ws_host,
-        config.ws_port,
+        "Agent WebSocket listening on %s://%s:%s%s",
+        config.ws_scheme,
+        config.ws_listen_host,
+        config.ws_listen_port,
         config.ws_path,
     )
     if web_server is not None:
         log.info(
-            "install server listening on http://%s:%s (advertise_host=%r)",
-            config.web_host,
-            config.web_port,
+            "install server listening on %s://%s:%s (advertise_host=%r)",
+            config.http_scheme,
+            config.web_listen_host,
+            config.web_listen_port,
             config.advertise_host or "<auto>",
         )
 

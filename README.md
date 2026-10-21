@@ -195,6 +195,12 @@ sudo ./relay/setup.sh \
 --web-host
 --web-port
 --advertise-host
+--domain              # Caddy TLS 활성화 (아래 참고)
+--tls-mode            # internal | files | dns
+--tls-cert / --tls-key
+--acme-email
+--dns-provider / --dns-token
+--ws-bind-port / --web-bind-port
 --admin-user
 --admin-password
 --service-user
@@ -206,7 +212,39 @@ sudo ./relay/setup.sh \
 --allow-nonroot
 ```
 
-### 2. 내부 서버 추가
+### 2. TLS (wss + https) 구성
+
+`--domain`을 지정하면 **Caddy**를 함께 설치하고, 기존 공개 포트(ws `8765`, web `1234`)를
+그대로 TLS 종단에 사용합니다. Python 서버는 loopback 바인드 포트로 옮겨집니다.
+
+```bash
+sudo ./relay/setup.sh \
+    --domain relay.example.com \
+    --admin-user alice
+```
+
+- **80/443 포트를 사용하지 않습니다.** WireGuard 대시보드 등 이미 그 포트를 쓰는
+  환경과 충돌하지 않습니다. Caddy의 내부 HTTP/HTTPS 포트는 `18080/18443`으로 낮춰 둡니다.
+- SSH 포트(2222)는 프록시를 거치지 않고 그대로 노출됩니다.
+- Caddy 인증서 발급 방식은 `--tls-mode`로 선택합니다:
+  - `internal` (기본값): Caddy 로컬 CA. 오프라인에서도 동작하지만 공인 CA가 아니므로
+    클라이언트가 인증서를 검증하지 않습니다(`tls_verify: false`). 루트 인증서는
+    `/ca.crt`로 제공되어 에이전트가 신뢰하도록 배포됩니다.
+  - `files`: `--tls-cert` / `--tls-key`로 직접 인증서를 지정합니다.
+  - `dns`: ACME DNS-01 챌린지. `--dns-provider cloudflare --dns-token <token>` 형태로
+    사용하며, 해당 DNS 모듈이 포함된 Caddy 빌드가 필요합니다(xcaddy).
+
+설치 스크립트가 처리하는 작업:
+
+- Python 및 필요한 패키지 설치
+- `/opt/xquare-ct-ssh-relay`에 애플리케이션 설치
+- `/etc/xquare-ct-ssh/relay.yaml` 생성
+- `/var/lib/xquare-ct-ssh/relay.db` 초기화
+- `agent/`를 설치용 `agent-dist.tar.gz`로 패키징
+- `xq-relay.service` 등록 및 실행
+- (`--domain` 사용 시) `/etc/xquare-ct-ssh/Caddyfile` 생성 + `xq-caddy.service` 실행
+
+### 3. 내부 서버 추가
 
 Relay에 SSH로 접속한 뒤 C2 CLI에서 서버를 등록합니다.
 
@@ -261,7 +299,7 @@ python -m relay.manage add-server ...
 에이전트가 접속할 Relay 주소는 다음 순서로 결정됩니다.
 
 1. `relay.advertise_host`
-2. `relay/setup.sh --advertise-host`
+2. `relay/setup.sh --advertise-host` (또는 `--domain`)
 3. SSH 접속에 사용한 주소
 4. `XQ_RELAY_ADVERTISE_HOST`
 
@@ -281,7 +319,30 @@ NAT나 프록시 뒤에서 운영한다면 `advertise_host`를 직접 지정하�
 
 포트를 변경했다면 `--ws-port`와 `--web-port`도 함께 맞춰야 합니다.
 
-TLS를 사용할 경우에는 nginx나 Caddy 같은 reverse proxy 뒤에 두고 `wss://`, `https://`를 사용하는 구성을 권장합니다.
+### TLS 뒤에서 운영하기
+
+`relay/setup.sh --domain`으로 Caddy를 붙이면 아래 값이 자동으로 설정됩니다.
+직접 구성하려면 동일하게 맞춰 주세요.
+
+```yaml
+relay:
+  advertise_host: relay.example.com
+  ws_port: 8765          # 공개 포트 (Caddy가 수신)
+  ws_bind_host: 127.0.0.1
+  ws_bind_port: 18765    # Python 서버가 바인드하는 loopback 포트
+  tls: true              # 생성되는 URL/명령이 wss://, https:// 사용
+  tls_verify: false      # internal CA 사용 시 클라이언트 검증 생략
+  tls_ca_file: /etc/xquare-ct-ssh/caddy-root.crt  # /ca.crt로 배포
+
+web:
+  web_port: 1234
+  web_bind_host: 127.0.0.1
+  web_bind_port: 11234
+```
+
+`tls: true`이면 `add-server`가 출력하는 설치 명령과 에이전트 실행 명령이
+각각 `https://`, `wss://`를 사용합니다. `tls_verify: false`이면 설치 명령에
+`curl -k`, 에이전트 명령에 `--no-verify-tls`가 추가됩니다.
 
 ---
 
@@ -313,23 +374,37 @@ WS  : ws://0.0.0.0:8765/agent
 WEB : http://0.0.0.0:1234
 ```
 
+TLS(`--domain`) 구성에서는 공개 포트는 동일하되 스킴만 `wss://`, `https://`로 바뀌고
+Python 서버는 loopback 바인드 포트로 이동합니다.
+
 ### 3. 내부 서버에 Agent 실행
 
 Linux:
 
 ```bash
 python -m agent \
-  --relay ws://relay-host:8765/agent \
+  --relay wss://relay-host:8765/agent \
   --id server-001 \
   --token xq_xxxxxxxxxxxxxxxxxxxx \
   --shell /bin/bash
 ```
 
+`internal` CA로 서명된 인증서를 쓴다면 CA를 신뢰하도록 지정합니다.
+
+```bash
+python -m agent \
+  --relay wss://relay-host:8765/agent \
+  --id server-001 --token xq_... \
+  --ca-file /etc/xquare-ct-ssh/caddy-root.crt
+```
+
+또는 검증을 생략할 수 있습니다: `--no-verify-tls` (환경변수 `XQ_VERIFY_TLS=0`).
+
 Windows:
 
 ```powershell
 python -m agent `
-  --relay ws://relay-host:8765/agent `
+  --relay wss://relay-host:8765/agent `
   --id win-001 `
   --token xq_... `
   --shell cmd.exe
@@ -368,6 +443,13 @@ sh
 ```
 
 다른 셸을 사용하려면 `--shell` 또는 `XQ_SHELL`을 지정하면 됩니다.
+
+TLS(`wss://`) 관련 에이전트 설정은 다음과 같습니다.
+
+```text
+--ca-file / XQ_CA_FILE        # 신뢰할 CA 번들 (예: internal CA의 root.crt)
+--verify-tls / XQ_VERIFY_TLS  # 인증서 검증 여부 (기본: 1)
+```
 
 ---
 
@@ -586,6 +668,7 @@ Relay 운영자 계정
 - 에이전트 토큰과 C2 비밀번호는 해시 형태로 저장
 - 평문 자격증명은 생성 시 한 번만 출력
 - TLS 환경에서는 `wss://`와 reverse proxy 사용 권장
+  - `relay/setup.sh --domain`이 Caddy를 붙이며 80/443은 사용하지 않음
 - Relay host key는 최초 실행 시 Ed25519 키로 자동 생성
 
 `allow_anonymous: true`는 C2 CLI 운영자 권한과 연결되므로 운영 환경에서 활성화하지 않는 것을 권장합니다.

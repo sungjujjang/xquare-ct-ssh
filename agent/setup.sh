@@ -8,7 +8,7 @@
 # overridden with --relay/--id/--token.
 #
 #   sudo ./agent/setup.sh \
-#       --relay ws://relay.example.com:8765/agent \
+#       --relay wss://relay.example.com:8765/agent \
 #       --id server-001 --token xq_xxxxxxxx
 #
 # It also accepts the same values from the XQ_* environment variables, which is
@@ -23,6 +23,8 @@ RELAY_URL="${XQ_RELAY_URL:-}"
 SERVER_ID="${XQ_SERVER_ID:-}"
 TOKEN="${XQ_AGENT_TOKEN:-}"
 SHELL_PATH="${XQ_SHELL:-}"
+VERIFY_TLS="${XQ_VERIFY_TLS:-}"
+CA_FILE="${XQ_CA_FILE:-}"
 INSTALL_DIR="${XQ_INSTALL_DIR:-/opt/xquare-ct-ssh-agent}"
 CONFIG_DIR="${XQ_CONFIG_DIR:-/etc/xquare-ct-ssh}"
 SERVICE_NAME="xq-agent"
@@ -45,13 +47,16 @@ usage() {
 Usage: sudo ./agent/setup.sh --relay URL --id ID --token TOKEN [options]
 
 Values may also be supplied via XQ_RELAY_URL, XQ_SERVER_ID, XQ_AGENT_TOKEN,
-XQ_SHELL and XQ_INSTALL_DIR (used by the relay's one-line installer).
+XQ_SHELL, XQ_VERIFY_TLS, XQ_CA_FILE and XQ_INSTALL_DIR (used by the relay's
+one-line installer).
 
 Options:
-  --relay URL            relay WebSocket URL, e.g. ws://relay:8765/agent
+  --relay URL            relay WebSocket URL, e.g. wss://relay:8765/agent
   --id ID                server id registered on the relay (e.g. server-001)
   --token TOKEN          agent registration token (xq_...)
   --shell PATH           shell to run (default: platform default, e.g. /bin/bash)
+  --verify-tls BOOL      verify the relay TLS certificate for wss:// (default: 1)
+  --ca-file PATH         PEM bundle used to verify the relay TLS certificate
   --install-dir DIR      application install dir   (default: /opt/xquare-ct-ssh-agent)
   --config-dir DIR       config dir                (default: /etc/xquare-ct-ssh)
   --service-name NAME    systemd unit name         (default: xq-agent)
@@ -72,6 +77,8 @@ while [ $# -gt 0 ]; do
     --id)              SERVER_ID="${2:?}"; shift 2 ;;
     --token)           TOKEN="${2:?}"; shift 2 ;;
     --shell)           SHELL_PATH="${2:?}"; shift 2 ;;
+    --verify-tls)      VERIFY_TLS="${2:?}"; shift 2 ;;
+    --ca-file)         CA_FILE="${2:?}"; shift 2 ;;
     --install-dir)     INSTALL_DIR="${2:?}"; shift 2 ;;
     --config-dir)      CONFIG_DIR="${2:?}"; shift 2 ;;
     --service-name)    SERVICE_NAME="${2:?}"; shift 2 ;;
@@ -163,6 +170,8 @@ read_existing_env() {
   value="$(sed -n 's/^XQ_SERVER_ID="\(.*\)"$/\1/p' "$ENV_FILE")"; [ -z "$SERVER_ID" ] && SERVER_ID="$value"
   value="$(sed -n 's/^XQ_AGENT_TOKEN="\(.*\)"$/\1/p' "$ENV_FILE")"; [ -z "$TOKEN" ] && TOKEN="$value"
   value="$(sed -n 's/^XQ_SHELL="\(.*\)"$/\1/p' "$ENV_FILE")"; [ -z "$SHELL_PATH" ] && SHELL_PATH="$value"
+  value="$(sed -n 's/^XQ_VERIFY_TLS="\(.*\)"$/\1/p' "$ENV_FILE")"; [ -z "$VERIFY_TLS" ] && VERIFY_TLS="$value"
+  value="$(sed -n 's/^XQ_CA_FILE="\(.*\)"$/\1/p' "$ENV_FILE")"; [ -z "$CA_FILE" ] && CA_FILE="$value"
 }
 
 write_env_file() {
@@ -179,6 +188,12 @@ write_env_file() {
     printf 'XQ_AGENT_TOKEN="%s"\n' "$TOKEN"
     if [ -n "$SHELL_PATH" ]; then
       printf 'XQ_SHELL="%s"\n' "$SHELL_PATH"
+    fi
+    if [ -n "$VERIFY_TLS" ]; then
+      printf 'XQ_VERIFY_TLS="%s"\n' "$VERIFY_TLS"
+    fi
+    if [ -n "$CA_FILE" ]; then
+      printf 'XQ_CA_FILE="%s"\n' "$CA_FILE"
     fi
   } > "$ENV_FILE"
   chmod 600 "$ENV_FILE"

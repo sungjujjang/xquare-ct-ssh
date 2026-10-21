@@ -40,8 +40,9 @@ def install_command(config: RelayConfig, name: str, token: str, advertise_host: 
     host = _format_host(advertise_host or config.advertise_host)
     if not host:
         return None
+    curl_opts = "" if config.tls_verify else "-k "
     return (
-        f"curl -fsSL 'http://{host}:{config.web_port}/install/{name}"
+        f"curl {curl_opts}-fsSL '{config.http_scheme}://{host}:{config.web_port}/install/{name}"
         f"?token={token}' | sudo bash"
     )
 
@@ -49,11 +50,13 @@ def install_command(config: RelayConfig, name: str, token: str, advertise_host: 
 def agent_command(config: RelayConfig, name: str, token: str, advertise_host: str | None, shell: str | None) -> str:
     host = _format_host(advertise_host or config.advertise_host) or "<relay-host>"
     command = (
-        f"python -m agent --relay ws://{host}:{config.ws_port}{config.ws_path} "
+        f"python -m agent --relay {config.ws_scheme}://{host}:{config.ws_port}{config.ws_path} "
         f"--id {name} --token {token}"
     )
     if shell:
         command += f" --shell {shell}"
+    if config.tls and not config.tls_verify:
+        command += " --no-verify-tls"
     return command
 
 

@@ -16,7 +16,8 @@ single command.  It serves three things:
     Liveness probe.
 
 The server runs in its own thread so it never interferes with the asyncio
-relay loop.  Put it behind TLS (nginx/caddy) in production.
+relay loop.  In production it sits behind Caddy (see ``relay/caddy.py`` and
+``relay/setup.sh``), which terminates https/wss on the public relay ports.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ log = logging.getLogger("relay.web")
 
 INSTALL_PATH = "/install/"
 PACKAGE_PATH = "/agent.tar.gz"
+CA_PATH = "/ca.crt"
 
 _LANDING = b"""<!doctype html>
 <html><head><meta charset="utf-8"><title>xquare Control Tower</title></head>
@@ -60,7 +62,12 @@ XQ_AGENT_TOKEN=@@TOKEN@@
 XQ_SHELL=''
 XQ_PACKAGE_URL=@@PACKAGE_URL@@
 XQ_INSTALL_DIR=@@INSTALL_DIR@@
+XQ_VERIFY_TLS=@@VERIFY_TLS@@
+XQ_CA_FILE=@@CA_FILE@@
+XQ_CA_URL=@@CA_URL@@
+XQ_CURL_OPTS=@@CURL_OPTS@@
 export XQ_RELAY_URL XQ_SERVER_ID XQ_AGENT_TOKEN XQ_SHELL XQ_PACKAGE_URL XQ_INSTALL_DIR
+export XQ_VERIFY_TLS XQ_CA_FILE XQ_CA_URL XQ_CURL_OPTS
 
 if [ "$(id -u)" -ne 0 ] && [ "${XQ_ALLOW_NONROOT:-0}" != "1" ]; then
   echo "[xq] must run as root (use: curl ... | sudo bash)" >&2
@@ -81,8 +88,16 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+if [ -n "$XQ_CA_URL" ]; then
+  XQ_CA_FILE="${XQ_CA_FILE:-/etc/xquare-ct-ssh/ca.crt}"
+  mkdir -p "$(dirname "$XQ_CA_FILE")"
+  echo "[xq] downloading relay CA certificate..."
+  curl $XQ_CURL_OPTS -fsSL "$XQ_CA_URL" -o "$XQ_CA_FILE"
+  export XQ_CA_FILE
+fi
+
 echo "[xq] downloading agent package..."
-curl -fsSL "$XQ_PACKAGE_URL" -o "$TMP/agent.tar.gz"
+curl $XQ_CURL_OPTS -fsSL "$XQ_PACKAGE_URL" -o "$TMP/agent.tar.gz"
 tar -xzf "$TMP/agent.tar.gz" -C "$TMP"
 
 if [ ! -f "$TMP/agent/setup.sh" ]; then
@@ -142,6 +157,8 @@ class _InstallRequestHandler(BaseHTTPRequestHandler):
             self._send_bytes(200, _LANDING, "text/html; charset=utf-8")
         elif path == PACKAGE_PATH:
             self._send_package()
+        elif path == CA_PATH:
+            self._send_ca()
         elif path.startswith(INSTALL_PATH):
             self._send_installer(path[len(INSTALL_PATH):], parsed.query)
         else:
@@ -162,6 +179,20 @@ class _InstallRequestHandler(BaseHTTPRequestHandler):
             return
         self._send_bytes(200, data, "application/gzip", filename="agent.tar.gz")
 
+    def _send_ca(self) -> None:
+        config: RelayConfig = self.server.config
+        if not config.tls_ca_file:
+            self._send_bytes(404, b"no CA certificate configured\n", "text/plain; charset=utf-8")
+            return
+        try:
+            with open(config.tls_ca_file, "rb") as handle:
+                data = handle.read()
+        except OSError as exc:
+            log.error("cannot read CA file %s: %s", config.tls_ca_file, exc)
+            self._send_bytes(404, b"CA certificate not available\n", "text/plain; charset=utf-8")
+            return
+        self._send_bytes(200, data, "application/x-pem-file", filename="ca.crt")
+
     def _send_installer(self, raw_name: str, query: str) -> None:
         db: RegistryDB = self.server.db
         config: RelayConfig = self.server.config
@@ -178,9 +209,16 @@ class _InstallRequestHandler(BaseHTTPRequestHandler):
         if not host:
             host = self.connection.getsockname()[0]
         display = _format_host(host)
-        relay_url = f"ws://{display}:{config.ws_port}{config.ws_path}"
-        package_url = f"http://{display}:{config.web_port}{PACKAGE_PATH}"
-        url = f"http://{display}:{config.web_port}{INSTALL_PATH}{name}?token={token}"
+        scheme = config.http_scheme
+        relay_url = f"{config.ws_scheme}://{display}:{config.ws_port}{config.ws_path}"
+        package_url = f"{scheme}://{display}:{config.web_port}{PACKAGE_PATH}"
+        url = f"{scheme}://{display}:{config.web_port}{INSTALL_PATH}{name}?token={token}"
+        ca_url = (
+            _sh_single(f"{scheme}://{display}:{config.web_port}{CA_PATH}")
+            if config.tls_ca_file
+            else "''"
+        )
+        curl_opts = "" if config.tls_verify else "-k"
 
         script = (
             _BOOTSTRAP
@@ -188,6 +226,10 @@ class _InstallRequestHandler(BaseHTTPRequestHandler):
             .replace("@@SERVER_ID@@", _sh_single(name))
             .replace("@@TOKEN@@", _sh_single(token))
             .replace("@@PACKAGE_URL@@", _sh_single(package_url))
+            .replace("@@VERIFY_TLS@@", "1" if config.tls_verify else "0")
+            .replace("@@CA_FILE@@", "''")
+            .replace("@@CA_URL@@", ca_url)
+            .replace("@@CURL_OPTS@@", curl_opts)
             .replace(
                 "@@INSTALL_DIR@@",
                 '"${XQ_INSTALL_DIR:-' + _dq_escape(DEFAULT_AGENT_DIR) + '}"',
@@ -239,7 +281,7 @@ class WebServer:
 
 def start_web_server(db: RegistryDB, config: RelayConfig) -> WebServer:
     httpd = _InstallHTTPServer(
-        (config.web_host, config.web_port), _InstallRequestHandler, db, config
+        (config.web_listen_host, config.web_listen_port), _InstallRequestHandler, db, config
     )
     thread = threading.Thread(target=httpd.serve_forever, name="xq-install-web", daemon=True)
     thread.start()

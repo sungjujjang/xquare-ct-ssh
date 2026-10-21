@@ -505,6 +505,16 @@ install_caddy_service() {
     warn "this caddy build lacks the '$DNS_PROVIDER' module; DNS-01 will fail until you install one that bundles it"
   fi
 
+  # The distro caddy package ships its own caddy.service bound to :80/:443.
+  # It would fight our unit for the ports, so stop and disable it.
+  if systemctl list-unit-files caddy.service >/dev/null 2>&1; then
+    if systemctl is-enabled caddy.service >/dev/null 2>&1 \
+       || systemctl is-active caddy.service >/dev/null 2>&1; then
+      log "disabling conflicting system 'caddy.service' (we use $CADDY_SERVICE)"
+      systemctl disable --now caddy.service >/dev/null 2>&1 || true
+    fi
+  fi
+
   local unit="/etc/systemd/system/$CADDY_SERVICE.service"
   log "installing systemd unit $unit"
   mkdir -p "$CADDY_DATA_DIR"

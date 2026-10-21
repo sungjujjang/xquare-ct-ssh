@@ -195,15 +195,6 @@ sudo ./relay/setup.sh \
 --web-host
 --web-port
 --advertise-host
---domain              # Caddy TLS, 두 서비스를 한 호스트로 (공유 포트)
---ws-domain           # wss 호스트 (서비스별 호스트 모드)
---web-domain          # https(설치 웹) 호스트
---tls-mode            # acme | internal | files | dns
---acme-email
---tls-cert / --tls-key
---dns-provider / --dns-token
---ws-tls-port / --web-tls-port
---ws-bind-port / --web-bind-port
 --admin-user
 --admin-password
 --service-user
@@ -215,65 +206,7 @@ sudo ./relay/setup.sh \
 --allow-nonroot
 ```
 
-### 2. TLS (wss + https) 구성
-
-두 가지 배포 형태를 지원합니다.
-
-**A. 서비스별 호스트 + 443 (공인 인증서 자동 발급, 권장)**
-
-`--ws-domain`/`--web-domain`을 각각 443에 두면 Caddy가 **ACME TLS-ALPN-01**로
-공인 인증서를 자동 발급합니다. 443만 사용하므로 80 포트는 필요 없습니다.
-클라이언트가 인증서를 정상 검증합니다(`tls_verify: true`).
-
-```bash
-sudo ./relay/setup.sh \
-    --tls-mode acme \
-    --ws-domain tunnel.xquare.xyz \
-    --web-domain xquare.xyz \
-    --admin-user alice
-```
-
-- 사전 조건: `xquare.xyz`와 `tunnel.xquare.xyz`의 A 레코드가 이 서버 IP를 가리켜야 합니다.
-- 결과: 설치 웹은 `https://xquare.xyz`, 에이전트는 `wss://tunnel.xquare.xyz/agent`
-  (둘 다 443). 443 하나는 인증서 1장에만 묶이므로 서브도메인을 분리합니다.
-- 공인 인증서이므로 에이전트에 `-k`/`--no-verify-tls`가 붙지 않습니다.
-
-**B. 공유 포트 (80/443 미사용)**
-
-`--domain`을 지정하면 한 호스트의 기존 공개 포트(ws `8765`, web `1234`)를 그대로
-TLS 종단에 사용합니다. 80/443을 쓰지 않으므로 WireGuard 대시보드 등과 충돌하지
-않지만, 자동 ACME가 불가능해 자체 서명/직접 인증서가 필요합니다.
-
-```bash
-sudo ./relay/setup.sh --domain relay.example.com --admin-user alice
-```
-
-```text
---tls-mode internal   # (기본값) Caddy 로컬 CA. 자동 생성되지만 공인 CA가 아니라서
-                      #   에이전트가 검증을 생략(curl -k / --no-verify-tls)하거나
-                      #   /ca.crt를 신뢰 등록해야 합니다.
---tls-mode files      # --tls-cert / --tls-key 로 직접 인증서 지정
---tls-mode dns        # ACME DNS-01 (--dns-provider cloudflare --dns-token <token>)
-                      #   해당 DNS 모듈이 포함된 Caddy 빌드 필요 (xcaddy)
-```
-
-공통 사항:
-
-- SSH 포트(2222)는 프록시를 거치지 않고 그대로 노출됩니다.
-- Caddy의 내부 HTTP/HTTPS 포트는 `18080/18443`으로 낮춰 둡니다.
-- Python 서버는 loopback 바인드 포트로 이동합니다.
-
-설치 스크립트가 처리하는 작업:
-
-- Python 및 필요한 패키지 설치
-- `/opt/xquare-ct-ssh-relay`에 애플리케이션 설치
-- `/etc/xquare-ct-ssh/relay.yaml` 생성
-- `/var/lib/xquare-ct-ssh/relay.db` 초기화
-- `agent/`를 설치용 `agent-dist.tar.gz`로 패키징
-- `xq-relay.service` 등록 및 실행
-- (`--domain` 사용 시) `/etc/xquare-ct-ssh/Caddyfile` 생성 + `xq-caddy.service` 실행
-
-### 3. 내부 서버 추가
+### 2. 내부 서버 추가
 
 Relay에 SSH로 접속한 뒤 C2 CLI에서 서버를 등록합니다.
 
@@ -328,7 +261,7 @@ python -m relay.manage add-server ...
 에이전트가 접속할 Relay 주소는 다음 순서로 결정됩니다.
 
 1. `relay.advertise_host`
-2. `relay/setup.sh --advertise-host` (또는 `--domain`)
+2. `relay/setup.sh --advertise-host`
 3. SSH 접속에 사용한 주소
 4. `XQ_RELAY_ADVERTISE_HOST`
 
@@ -348,51 +281,7 @@ NAT나 프록시 뒤에서 운영한다면 `advertise_host`를 직접 지정하�
 
 포트를 변경했다면 `--ws-port`와 `--web-port`도 함께 맞춰야 합니다.
 
-### TLS 뒤에서 운영하기
-
-`relay/setup.sh`로 Caddy를 붙이면 아래 값이 자동으로 설정됩니다.
-직접 구성하려면 동일하게 맞춰 주세요.
-
-서비스별 호스트 + 443 (공인 인증서 자동, 권장):
-
-```yaml
-relay:
-  advertise_host: tunnel.xquare.xyz     # 에이전트 wss 호스트
-  web_advertise_host: xquare.xyz        # 설치 웹 https 호스트
-  ws_port: 443                          # 공개 포트 (Caddy가 수신)
-  ws_bind_host: 127.0.0.1
-  ws_bind_port: 18765                   # Python 서버가 바인드하는 loopback 포트
-  tls: true
-  tls_verify: true                      # 공인 인증서 → 정상 검증
-
-web:
-  web_port: 443
-  web_bind_host: 127.0.0.1
-  web_bind_port: 11234
-```
-
-공유 포트 + internal (80/443 미사용):
-
-```yaml
-relay:
-  advertise_host: relay.example.com
-  ws_port: 8765
-  ws_bind_host: 127.0.0.1
-  ws_bind_port: 18765
-  tls: true
-  tls_verify: false                     # internal CA → 검증 생략
-  tls_ca_file: /etc/xquare-ct-ssh/caddy-root.crt  # /ca.crt로 배포
-
-web:
-  web_port: 1234
-  web_bind_host: 127.0.0.1
-  web_bind_port: 11234
-```
-
-`tls: true`이면 `add-server`가 출력하는 설치 명령과 에이전트 실행 명령이
-각각 `https://`, `wss://`를 사용합니다. `tls_verify: false`이면 설치 명령에
-`curl -k`, 에이전트 명령에 `--no-verify-tls`가 추가됩니다.
-URL에서 스킴의 기본 포트(443/80)는 생략됩니다.
+TLS를 사용할 경우에는 nginx나 Caddy 같은 reverse proxy 뒤에 두고 `wss://`, `https://`를 사용하는 구성을 권장합니다.
 
 ---
 
@@ -424,37 +313,23 @@ WS  : ws://0.0.0.0:8765/agent
 WEB : http://0.0.0.0:1234
 ```
 
-TLS(`--domain`) 구성에서는 공개 포트는 동일하되 스킴만 `wss://`, `https://`로 바뀌고
-Python 서버는 loopback 바인드 포트로 이동합니다.
-
 ### 3. 내부 서버에 Agent 실행
 
 Linux:
 
 ```bash
 python -m agent \
-  --relay wss://relay-host:8765/agent \
+  --relay ws://relay-host:8765/agent \
   --id server-001 \
   --token xq_xxxxxxxxxxxxxxxxxxxx \
   --shell /bin/bash
 ```
 
-`internal` CA로 서명된 인증서를 쓴다면 CA를 신뢰하도록 지정합니다.
-
-```bash
-python -m agent \
-  --relay wss://relay-host:8765/agent \
-  --id server-001 --token xq_... \
-  --ca-file /etc/xquare-ct-ssh/caddy-root.crt
-```
-
-또는 검증을 생략할 수 있습니다: `--no-verify-tls` (환경변수 `XQ_VERIFY_TLS=0`).
-
 Windows:
 
 ```powershell
 python -m agent `
-  --relay wss://relay-host:8765/agent `
+  --relay ws://relay-host:8765/agent `
   --id win-001 `
   --token xq_... `
   --shell cmd.exe
@@ -493,13 +368,6 @@ sh
 ```
 
 다른 셸을 사용하려면 `--shell` 또는 `XQ_SHELL`을 지정하면 됩니다.
-
-TLS(`wss://`) 관련 에이전트 설정은 다음과 같습니다.
-
-```text
---ca-file / XQ_CA_FILE        # 신뢰할 CA 번들 (예: internal CA의 root.crt)
---verify-tls / XQ_VERIFY_TLS  # 인증서 검증 여부 (기본: 1)
-```
 
 ---
 
@@ -718,7 +586,6 @@ Relay 운영자 계정
 - 에이전트 토큰과 C2 비밀번호는 해시 형태로 저장
 - 평문 자격증명은 생성 시 한 번만 출력
 - TLS 환경에서는 `wss://`와 reverse proxy 사용 권장
-  - `relay/setup.sh --domain`이 Caddy를 붙이며 80/443은 사용하지 않음
 - Relay host key는 최초 실행 시 Ed25519 키로 자동 생성
 
 `allow_anonymous: true`는 C2 CLI 운영자 권한과 연결되므로 운영 환경에서 활성화하지 않는 것을 권장합니다.

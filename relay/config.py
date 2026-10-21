@@ -48,57 +48,14 @@ class RelayConfig:
     web_enabled: bool = True
     web_host: str = "0.0.0.0"
     web_port: int = 1234
-    # When a TLS terminator (Caddy) fronts the relay, ``ws_host``/``ws_port`` and
-    # ``web_host``/``web_port`` describe the *public* endpoints while the Python
-    # servers bind to these addresses instead (default: the public values).
-    ws_bind_host: str | None = None
-    ws_bind_port: int | None = None
-    web_bind_host: str | None = None
-    web_bind_port: int | None = None
-    # True when a TLS proxy terminates wss/https in front of the relay: generated
-    # URLs then use wss:// and https://.
-    tls: bool = False
-    # False tells generated installers/agents to skip certificate verification
-    # (used with Caddy's internal CA, which public clients do not trust).
-    tls_verify: bool = True
-    # Optional PEM bundle exposed at /ca.crt so agents can trust an internal CA.
-    tls_ca_file: str = ""
     # tarball served at /agent.tar.gz (contains the agent/ package)
     agent_package: str = "agent-dist.tar.gz"
     # host/IP placed in generated install URLs; falls back to the address the
     # operator connected to when empty
     advertise_host: str = ""
-    # host used in install/web URLs when it differs from advertise_host (e.g.
-    # advertise_host=tunnel.example.com for wss but web on example.com)
-    web_advertise_host: str = ""
     log_level: str = "INFO"
     banner: str = DEFAULT_BANNER
     extra: dict[str, Any] = field(default_factory=dict)
-
-    # -- derived endpoint helpers -----------------------------------------
-    @property
-    def ws_listen_host(self) -> str:
-        return self.ws_bind_host or self.ws_host
-
-    @property
-    def ws_listen_port(self) -> int:
-        return self.ws_bind_port or self.ws_port
-
-    @property
-    def web_listen_host(self) -> str:
-        return self.web_bind_host or self.web_host
-
-    @property
-    def web_listen_port(self) -> int:
-        return self.web_bind_port or self.web_port
-
-    @property
-    def ws_scheme(self) -> str:
-        return "wss" if self.tls else "ws"
-
-    @property
-    def http_scheme(self) -> str:
-        return "https" if self.tls else "http"
 
     @classmethod
     def load(cls, path: str | None) -> "RelayConfig":
@@ -117,13 +74,6 @@ class RelayConfig:
             "ssh_port",
             "ws_host",
             "ws_port",
-            "ws_bind_host",
-            "ws_bind_port",
-            "web_bind_host",
-            "web_bind_port",
-            "tls",
-            "tls_verify",
-            "tls_ca_file",
             "ws_path",
             "host_key",
             "authorized_keys",
@@ -134,13 +84,12 @@ class RelayConfig:
             "ping_timeout",
             "open_timeout",
             "advertise_host",
-            "web_advertise_host",
             "banner",
         )
         for name in simple_fields:
             if name in relay:
                 setattr(config, name, relay[name])
-        web_fields = ("web_enabled", "web_host", "web_port", "web_bind_host", "web_bind_port", "agent_package")
+        web_fields = ("web_enabled", "web_host", "web_port", "agent_package")
         for name in web_fields:
             if name in web:
                 setattr(config, name, web[name])
@@ -152,35 +101,27 @@ class RelayConfig:
             config.log_level = logging["level"]
 
         # environment overrides (handy for containers)
-        env_map: dict[str, tuple[str, str]] = {
-            "XQ_RELAY_SSH_HOST": ("ssh_host", "str"),
-            "XQ_RELAY_SSH_PORT": ("ssh_port", "int"),
-            "XQ_RELAY_WS_HOST": ("ws_host", "str"),
-            "XQ_RELAY_WS_PORT": ("ws_port", "int"),
-            "XQ_RELAY_WS_BIND_HOST": ("ws_bind_host", "str"),
-            "XQ_RELAY_WS_BIND_PORT": ("ws_bind_port", "int"),
-            "XQ_RELAY_WEB_BIND_HOST": ("web_bind_host", "str"),
-            "XQ_RELAY_WEB_BIND_PORT": ("web_bind_port", "int"),
-            "XQ_RELAY_HOST_KEY": ("host_key", "str"),
-            "XQ_RELAY_DB": ("db_path", "str"),
-            "XQ_RELAY_ALLOW_ANONYMOUS": ("allow_anonymous", "bool"),
-            "XQ_RELAY_WEB_HOST": ("web_host", "str"),
-            "XQ_RELAY_WEB_PORT": ("web_port", "int"),
-            "XQ_RELAY_ADVERTISE_HOST": ("advertise_host", "str"),
-            "XQ_RELAY_WEB_ADVERTISE_HOST": ("web_advertise_host", "str"),
-            "XQ_RELAY_AGENT_PACKAGE": ("agent_package", "str"),
-            "XQ_RELAY_TLS": ("tls", "bool"),
-            "XQ_RELAY_TLS_VERIFY": ("tls_verify", "bool"),
-            "XQ_RELAY_TLS_CA_FILE": ("tls_ca_file", "str"),
+        env_map = {
+            "XQ_RELAY_SSH_HOST": "ssh_host",
+            "XQ_RELAY_SSH_PORT": "ssh_port",
+            "XQ_RELAY_WS_HOST": "ws_host",
+            "XQ_RELAY_WS_PORT": "ws_port",
+            "XQ_RELAY_HOST_KEY": "host_key",
+            "XQ_RELAY_DB": "db_path",
+            "XQ_RELAY_ALLOW_ANONYMOUS": "allow_anonymous",
+            "XQ_RELAY_WEB_HOST": "web_host",
+            "XQ_RELAY_WEB_PORT": "web_port",
+            "XQ_RELAY_ADVERTISE_HOST": "advertise_host",
+            "XQ_RELAY_AGENT_PACKAGE": "agent_package",
         }
-        for env_name, (field_name, kind) in env_map.items():
-            if env_name not in os.environ:
-                continue
-            raw = os.environ[env_name]
-            if kind == "bool":
-                setattr(config, field_name, raw.strip().lower() in ("1", "true", "yes", "on"))
-            elif kind == "int":
-                setattr(config, field_name, int(raw))
-            else:
-                setattr(config, field_name, raw)
+        for env_name, field_name in env_map.items():
+            if env_name in os.environ:
+                raw = os.environ[env_name]
+                current = getattr(config, field_name)
+                if isinstance(current, bool):
+                    setattr(config, field_name, raw.strip().lower() in ("1", "true", "yes", "on"))
+                elif isinstance(current, int):
+                    setattr(config, field_name, int(raw))
+                else:
+                    setattr(config, field_name, raw)
         return config

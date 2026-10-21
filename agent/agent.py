@@ -14,7 +14,6 @@ import logging
 import os
 import platform
 import socket
-import ssl
 from dataclasses import dataclass, field
 
 import websockets
@@ -38,7 +37,6 @@ class AgentConfig:
     shell: str | None = None
     cwd: str | None = None
     verify_tls: bool = True
-    ca_file: str | None = None
     ping_interval: float = 20.0
     ping_timeout: float = 20.0
     reconnect_min: float = 1.0
@@ -142,21 +140,9 @@ class Agent:
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, self.config.reconnect_max)
 
-    def _ssl_context(self) -> ssl.SSLContext | None:
-        """TLS settings for a ``wss://`` relay (``None`` for plain ``ws://``)."""
-        if not self.config.relay_url.lower().startswith("wss://"):
-            return None
-        if not self.config.verify_tls:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            return context
-        if self.config.ca_file:
-            return ssl.create_default_context(cafile=self.config.ca_file)
-        return ssl.create_default_context()
-
     async def _connect_and_serve(self) -> None:
         log.info("connecting to relay %s as %s", self.config.relay_url, self.config.server_id)
+        ssl_arg = None
         async with websockets.connect(
             self.config.relay_url,
             max_size=protocol.MAX_FRAME_SIZE,
@@ -164,7 +150,7 @@ class Agent:
             ping_timeout=self.config.ping_timeout,
             open_timeout=15,
             proxy=None,
-            ssl=self._ssl_context(),
+            ssl=ssl_arg,
         ) as ws:
             self._ws = ws
             try:

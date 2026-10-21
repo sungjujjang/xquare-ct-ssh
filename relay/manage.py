@@ -33,44 +33,27 @@ def _format_host(host: str) -> str:
     return f"[{host}]" if ":" in host and not host.startswith("[") else host
 
 
-def _authority(host: str, port: int, scheme: str) -> str:
-    """``host:port`` for a URL, omitting the scheme's default port."""
-    display = _format_host(host)
-    default_port = {"https": 443, "wss": 443, "http": 80, "ws": 80}.get(scheme)
-    if default_port is not None and port == default_port:
-        return display
-    return f"{display}:{port}"
-
-
 def install_command(config: RelayConfig, name: str, token: str, advertise_host: str | None) -> str | None:
     """Return the one-line ``curl ... | sudo bash`` installer, or None if web is off."""
     if not config.web_enabled:
         return None
-    scheme = config.http_scheme
-    host = _format_host(advertise_host or config.web_advertise_host or config.advertise_host)
+    host = _format_host(advertise_host or config.advertise_host)
     if not host:
         return None
-    authority = _authority(host, config.web_port, scheme)
-    curl_opts = "" if config.tls_verify else "-k "
     return (
-        f"curl {curl_opts}-fsSL '{scheme}://{authority}/install/{name}"
+        f"curl -fsSL 'http://{host}:{config.web_port}/install/{name}"
         f"?token={token}' | sudo bash"
     )
 
 
 def agent_command(config: RelayConfig, name: str, token: str, advertise_host: str | None, shell: str | None) -> str:
     host = _format_host(advertise_host or config.advertise_host) or "<relay-host>"
-    authority = _authority(host, config.ws_port, config.ws_scheme)
     command = (
-        f"python -m agent --relay {config.ws_scheme}://{authority}{config.ws_path} "
+        f"python -m agent --relay ws://{host}:{config.ws_port}{config.ws_path} "
         f"--id {name} --token {token}"
     )
     if shell:
         command += f" --shell {shell}"
-    if config.tls and not config.tls_verify:
-        command += " --no-verify-tls"
-    elif config.tls and config.tls_ca_file:
-        command += f" --ca-file {config.tls_ca_file}"
     return command
 
 

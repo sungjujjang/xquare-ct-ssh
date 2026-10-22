@@ -33,7 +33,6 @@ log = logging.getLogger("relay.web")
 
 INSTALL_PATH = "/install/"
 PACKAGE_PATH = "/agent.tar.gz"
-CA_PATH = "/ca.crt"
 
 _LANDING = b"""<!doctype html>
 <html><head><meta charset="utf-8"><title>xquare Control Tower</title></head>
@@ -41,7 +40,7 @@ _LANDING = b"""<!doctype html>
 <h1>xquare Control Tower</h1>
 <p>This host is an SSH relay. Internal agents install themselves with the
 one-line command printed by <code>add-server</code> in the C2 CLI.</p>
-<p>Endpoints: <code>/health</code>, <code>/agent.tar.gz</code>, <code>/ca.crt</code>,
+<p>Endpoints: <code>/health</code>, <code>/agent.tar.gz</code>,
 <code>/install/&lt;server-id&gt;?token=&lt;token&gt;</code></p>
 </body></html>
 """
@@ -61,11 +60,7 @@ XQ_AGENT_TOKEN=@@TOKEN@@
 XQ_SHELL=''
 XQ_PACKAGE_URL=@@PACKAGE_URL@@
 XQ_INSTALL_DIR=@@INSTALL_DIR@@
-XQ_VERIFY_TLS=@@VERIFY_TLS@@
-XQ_CA_FILE=''
-XQ_CA_URL=@@CA_URL@@
 export XQ_RELAY_URL XQ_SERVER_ID XQ_AGENT_TOKEN XQ_SHELL XQ_PACKAGE_URL XQ_INSTALL_DIR
-export XQ_VERIFY_TLS XQ_CA_FILE XQ_CA_URL
 
 if [ "$(id -u)" -ne 0 ] && [ "${XQ_ALLOW_NONROOT:-0}" != "1" ]; then
   echo "[xq] must run as root (use: curl ... | sudo bash)" >&2
@@ -85,14 +80,6 @@ fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-
-if [ -n "$XQ_CA_URL" ]; then
-  XQ_CA_FILE="${XQ_CA_FILE:-/etc/xquare-ct-ssh/ca.crt}"
-  mkdir -p "$(dirname "$XQ_CA_FILE")"
-  echo "[xq] downloading relay CA certificate..."
-  curl -fsSL "$XQ_CA_URL" -o "$XQ_CA_FILE"
-  export XQ_CA_FILE
-fi
 
 echo "[xq] downloading agent package..."
 curl -fsSL "$XQ_PACKAGE_URL" -o "$TMP/agent.tar.gz"
@@ -153,8 +140,6 @@ class _InstallRequestHandler(BaseHTTPRequestHandler):
             self._send_bytes(200, b"ok\n", "text/plain; charset=utf-8")
         elif path in ("/", "/index.html"):
             self._send_bytes(200, _LANDING, "text/html; charset=utf-8")
-        elif path == CA_PATH:
-            self._send_ca()
         elif path == PACKAGE_PATH:
             self._send_package()
         elif path.startswith(INSTALL_PATH):
@@ -166,20 +151,6 @@ class _InstallRequestHandler(BaseHTTPRequestHandler):
         self._send_bytes(200, b"", "text/plain; charset=utf-8")
 
     # -- handlers ----------------------------------------------------------
-    def _send_ca(self) -> None:
-        config: RelayConfig = self.server.config
-        if not config.tls_ca_file:
-            self._send_bytes(404, b"no CA certificate configured\n", "text/plain; charset=utf-8")
-            return
-        try:
-            with open(config.tls_ca_file, "rb") as handle:
-                data = handle.read()
-        except OSError as exc:
-            log.error("cannot read CA file %s: %s", config.tls_ca_file, exc)
-            self._send_bytes(404, b"CA certificate not available\n", "text/plain; charset=utf-8")
-            return
-        self._send_bytes(200, data, "application/x-pem-file", filename="ca.crt")
-
     def _send_package(self) -> None:
         config: RelayConfig = self.server.config
         try:
@@ -207,13 +178,9 @@ class _InstallRequestHandler(BaseHTTPRequestHandler):
         if not host:
             host = self.connection.getsockname()[0]
         display = _format_host(host)
-        ws_display = config.ws_authority(config.advertise_host or host)
-        relay_url = f"{config.ws_scheme}://{ws_display}{config.ws_path}"
+        relay_url = f"ws://{display}:{config.ws_port}{config.ws_path}"
         package_url = f"http://{display}:{config.web_port}{PACKAGE_PATH}"
         url = f"http://{display}:{config.web_port}{INSTALL_PATH}{name}?token={token}"
-        ca_url = ""
-        if config.tls and not config.tls_verify and config.tls_ca_file:
-            ca_url = f"http://{display}:{config.web_port}{CA_PATH}"
 
         script = (
             _BOOTSTRAP
@@ -221,8 +188,6 @@ class _InstallRequestHandler(BaseHTTPRequestHandler):
             .replace("@@SERVER_ID@@", _sh_single(name))
             .replace("@@TOKEN@@", _sh_single(token))
             .replace("@@PACKAGE_URL@@", _sh_single(package_url))
-            .replace("@@VERIFY_TLS@@", _sh_single("1" if config.tls_verify else "0"))
-            .replace("@@CA_URL@@", _sh_single(ca_url))
             .replace(
                 "@@INSTALL_DIR@@",
                 '"${XQ_INSTALL_DIR:-' + _dq_escape(DEFAULT_AGENT_DIR) + '}"',

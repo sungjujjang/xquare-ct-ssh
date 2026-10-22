@@ -47,16 +47,11 @@ def install_command(config: RelayConfig, name: str, token: str, advertise_host: 
 
 
 def agent_command(config: RelayConfig, name: str, token: str, advertise_host: str | None, shell: str | None) -> str:
-    host = advertise_host or config.advertise_host
-    authority = config.ws_authority(host) or "<relay-host>"
+    host = _format_host(advertise_host or config.advertise_host) or "<relay-host>"
     command = (
-        f"python -m agent --relay {config.ws_scheme}://{authority}{config.ws_path} "
+        f"python -m agent --relay ws://{host}:{config.ws_port}{config.ws_path} "
         f"--id {name} --token {token}"
     )
-    if config.tls and not config.tls_verify:
-        command += " --no-verify-tls"
-        if config.tls_ca_file:
-            command += f" --ca-file {config.tls_ca_file}"
     if shell:
         command += f" --shell {shell}"
     return command

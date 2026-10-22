@@ -281,7 +281,7 @@ NAT나 프록시 뒤에서 운영한다면 `advertise_host`를 직접 지정하�
 
 포트를 변경했다면 `--ws-port`와 `--web-port`도 함께 맞춰야 합니다.
 
-에이전트 WebSocket을 TLS로 감쌀 경우 `relay/setup.sh --domain <호스트>` 로 Caddy를 앞단에 두고 `wss://` 를 사용하도록 구성할 수 있습니다. 기본 모드 `--tls-mode acme` 는 Let's Encrypt(TLS-ALPN-01) 공인인증서를 443 포트에서 발급받으며, 파이썬 WS 서버는 `ws_bind_port`(기본 18765) 루프백에만 바인딩됩니다. 설치 웹 서버(`--web-port`, 기본 1234)는 프록시하지 않고 평문 `http://` 로 그대로 둡니다.
+TLS를 사용할 경우에는 nginx나 Caddy 같은 reverse proxy 뒤에 두고 `wss://`, `https://`를 사용하는 구성을 권장합니다.
 
 ---
 
@@ -585,7 +585,7 @@ Relay 운영자 계정
 - 프로덕션에서는 `allow_anonymous: false` 권장
 - 에이전트 토큰과 C2 비밀번호는 해시 형태로 저장
 - 평문 자격증명은 생성 시 한 번만 출력
-- 에이전트 WebSocket은 `--domain`으로 Caddy TLS(`wss://`) 적용 권장 (설치 웹은 평문 http 유지)
+- TLS 환경에서는 `wss://`와 reverse proxy 사용 권장
 - Relay host key는 최초 실행 시 Ed25519 키로 자동 생성
 
 `allow_anonymous: true`는 C2 CLI 운영자 권한과 연결되므로 운영 환경에서 활성화하지 않는 것을 권장합니다.

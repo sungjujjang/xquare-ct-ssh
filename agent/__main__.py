@@ -35,14 +35,6 @@ def build_config(args: argparse.Namespace) -> AgentConfig:
             return file_cfg[file_key]
         return default
 
-    def pick_bool(cli_value, env_name, file_key, default):
-        raw = pick(cli_value, env_name, file_key, None)
-        if raw is None:
-            return default
-        if isinstance(raw, bool):
-            return raw
-        return str(raw).strip().lower() in ("1", "true", "yes", "on")
-
     relay_url = pick(args.relay, "XQ_RELAY_URL", "relay_url")
     server_id = pick(args.id, "XQ_SERVER_ID", "server_id")
     token = pick(args.token, "XQ_AGENT_TOKEN", "token")
@@ -59,8 +51,6 @@ def build_config(args: argparse.Namespace) -> AgentConfig:
         token=token,
         shell=pick(args.shell, "XQ_SHELL", "shell"),
         cwd=pick(args.cwd, "XQ_CWD", "cwd"),
-        verify_tls=pick_bool(args.verify_tls, "XQ_VERIFY_TLS", "verify_tls", True),
-        ca_file=pick(args.ca_file, "XQ_CA_FILE", "ca_file"),
         env=env,
     )
 
@@ -94,18 +84,11 @@ async def amain(config: AgentConfig) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="xquare Control Tower internal agent")
     parser.add_argument("-c", "--config", help="path to a YAML config file")
-    parser.add_argument("--relay", help="relay WebSocket URL, e.g. wss://relay:8765/agent")
+    parser.add_argument("--relay", help="relay WebSocket URL, e.g. ws://relay:8765/agent")
     parser.add_argument("--id", help="server id (name) registered on the relay")
     parser.add_argument("--token", help="agent registration token")
     parser.add_argument("--shell", help="shell to run (default: platform shell)")
     parser.add_argument("--cwd", help="working directory for the shell")
-    parser.add_argument(
-        "--verify-tls",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="verify the relay TLS certificate for wss:// (default: verify)",
-    )
-    parser.add_argument("--ca-file", help="PEM bundle used to verify the relay TLS certificate")
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
 
